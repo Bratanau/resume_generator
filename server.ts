@@ -3,6 +3,10 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI } from '@google/genai';
+import { createRequire } from 'module';
+
+const require = createRequire(import.meta.url);
+const { PDFParse } = require('pdf-parse');
 
 dotenv.config();
 
@@ -10,9 +14,9 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const port = Number(process.env.PORT) || 3000;
+const port = 3000;
 
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '20mb' }));
 
 // Initialize GoogleGenAI SDK server-side
 const apiKey = process.env.GEMINI_API_KEY;
@@ -33,15 +37,33 @@ if (apiKey) {
 }
 
 // Timeout wrapper to guarantee responsive UI under slow network or missing API keys
-function withTimeout<T>(promise: Promise<T>, ms: number = 3000): Promise<T> {
+function withTimeout<T>(promise: Promise<T>, ms: number = 15000): Promise<T> {
   return Promise.race([
     promise,
     new Promise<T>((_, reject) => setTimeout(() => reject(new Error('AI Request Timeout')), ms))
   ]);
 }
 
+// Helper: extract raw text from PDF Base64 safely
+async function extractTextFromPdf(base64?: string): Promise<string> {
+  if (!base64 || typeof base64 !== 'string' || base64.length < 100) return '';
+  try {
+    const cleanBase64 = base64.includes(',') ? base64.split(',')[1] : base64;
+    const buffer = Buffer.from(cleanBase64, 'base64');
+    if (buffer.length < 100) return '';
+    const parser = new PDFParse({ data: buffer });
+    await parser.load();
+    const result = await parser.getText();
+    await parser.destroy();
+    return typeof result === 'string' ? result : (result?.text || '');
+  } catch (err) {
+    return '';
+  }
+}
+
 // In-memory telemetry storage for simulated sessions & live captures
 const sessionStore: Record<string, any> = {};
+
 
 // 1. AI STAR Unpacker Endpoint
 app.post('/api/ai/unpack', async (req, res) => {
@@ -348,24 +370,139 @@ app.get('/api/telemetry/sessions', (req, res) => {
 // 5. Simplified Flow Endpoints (Gemini-style Chat & Direct Apply Link Tracking)
 const simpleTrackingStore: Record<string, any> = {};
 
+// Semantic resume parser for personalized analysis citing the candidate's actual text
+function semanticAnalyzeResume(text: string, fileName?: string) {
+  const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
+  
+  // Extract Name (first line usually, if not a keyword)
+  let candidateName = 'Кандидат';
+  for (const line of lines.slice(0, 3)) {
+    if (!/опыт|резюме|resume|cv|контакты|skills|навыки|телефон|email|http|город/i.test(line) && line.length > 3 && line.length < 40) {
+      candidateName = line.replace(/^[#*\-•\d.]+\s*/, '').trim();
+      break;
+    }
+  }
+
+  // Extract Role
+  let detectedRole = 'Senior Software Engineer';
+  const roleLine = lines.find((l) => /frontend|backend|full-?stack|разработчик|инженер|architect|lead|devops|qa|mobile|ios|android|data/i.test(l));
+  if (roleLine) {
+    detectedRole = roleLine.replace(/^[#*\-•\d.]+\s*/, '').split(/[|,]/)[0].trim();
+  }
+
+  // Extract Tech Stack
+  const knownTech = [
+    'React', 'TypeScript', 'JavaScript', 'Next.js', 'Vue', 'Angular', 'Zustand', 'Redux', 'WebSockets', 'Tailwind',
+    'Node.js', 'Go', 'Golang', 'Python', 'FastAPI', 'Django', 'Java', 'Spring', 'Kotlin', 'Rust', 'C++', 'C#', '.NET',
+    'PostgreSQL', 'MySQL', 'MongoDB', 'Redis', 'Kafka', 'RabbitMQ', 'Docker', 'Kubernetes', 'K8s', 'AWS', 'GCP',
+    'CI/CD', 'GitLab', 'GitHub Actions', 'Vite', 'GraphQL', 'REST API', 'gRPC', 'OpenTelemetry', 'ClickHouse', 'Elasticsearch'
+  ];
+  const detectedTech = knownTech.filter((tech) => {
+    const escaped = tech.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`(?:^|[^a-zA-Z0-9_])${escaped}(?:$|[^a-zA-Z0-9_])`, 'i').test(text);
+  });
+  if (detectedTech.length === 0) {
+    detectedTech.push('TypeScript', 'React', 'Node.js', 'PostgreSQL');
+  }
+
+  // Find candidate's actual bullet points or experience sentences
+  const rawBullets = lines.filter((l) => 
+    /^[-•*–—]/.test(l) || 
+    /разрабатывал|оптимизировал|переписал|настраивал|занимался|исправлял|внедрил|создал|участвовал|поддерживал|developed|implemented|optimized|maintained|built/i.test(l)
+  ).map((b) => b.replace(/^[-•*–—\d.]+\s*/, '').trim()).filter((b) => b.length > 20);
+
+  // Fallback bullets if resume text is brief
+  const sampleBullets = [
+    lines[2] || 'Разработка и проектирование пользовательских интерфейсов и клиентской архитектуры',
+    lines[3] || 'Оптимизация производительности компонентов и сетевого взаимодействия',
+    lines[4] || 'Настройка процесса сборки проекта и автоматизации CI/CD'
+  ];
+
+  const actualBullets = rawBullets.length >= 2 ? rawBullets : sampleBullets;
+
+  // Build 3 deeply tailored questions citing the candidate's exact sentences
+  const specificQuestions = [
+    {
+      id: 1,
+      context: 'Ключевой проект / Задача 1',
+      quote: `«${actualBullets[0] || 'Разработка основного функционала сервиса'}»`,
+      issue: 'Формулировка описывает действие, но не показывает масштаб вашей личной ответственности и нагрузку на систему.',
+      question: `В пункте «${(actualBullets[0] || '').slice(0, 60)}...» вы описали реализацию задачи. Каков был реальный масштаб (RPS, число пользователей, объем данных или частота вызовов) и с какими архитектурными сложностями вы столкнулись?`,
+      placeholder: 'Например: 15,000 активных пользователей, пик до 8,000 запросов/сек, изолировали микросервис...',
+      sampleAnswer: 'Обслуживали 15 000 активных пользователей, выдерживали до 8 000 запросов/сек без задержек.'
+    },
+    {
+      id: 2,
+      context: 'Оптимизация и технологии',
+      quote: `«${actualBullets[1] || 'Оптимизация производительности и рефакторинг'}»`,
+      issue: 'Не указаны измеримые метрики «до и после». Рекрутеры ищут доказательства инженерной зрелости в миллисекундах или процентах.',
+      question: `Вы упомянули работу над «${(actualBullets[1] || '').slice(0, 55)}...». Как именно изменились метрики эффективности (latency/FPS, потребление памяти, скорость сборки или время отклика) в цифрах?`,
+      placeholder: 'Например: снизили задержку на 65% (с 380мс до 130мс), время сборки сократилось в 2 раза...',
+      sampleAnswer: 'Снизили время загрузки страницы на 58% (с 3.2с до 1.3с), сократили потребление памяти на 40%.'
+    },
+    {
+      id: 3,
+      context: 'Бизнес-результат и надежность',
+      quote: `«${actualBullets[2] || actualBullets[0] || 'Поддержка и развитие сервиса'}»`,
+      issue: 'Звучит как рутинная поддержка без оцифрованного влияния на бизнес или процессы команды.',
+      question: `Какую выгоду получил бизнес или команда от решения «${(actualBullets[2] || actualBullets[0] || '').slice(0, 50)}...» (сокращение числа инцидентов, экономия бюджета, ускорение релизов)?`,
+      placeholder: 'Например: ликвидировали сбои в пиковые часы (SLA 99.98%), ускорили релизный цикл с 2 недель до 2 дней...',
+      sampleAnswer: 'Ликвидировали дедлоки в пиковые дни, подняли SLA до 99.99% и сократили время выкатки релиза с 4 дней до 3 часов.'
+    }
+  ];
+
+  return {
+    candidateName,
+    detectedRole,
+    detectedTech,
+    greeting: `Здравствуйте, ${candidateName}! Я детально изучил ваше резюме на позицию «${detectedRole}»${fileName ? ` (${fileName})` : ''}. В вашем опыте выделяется стек: ${detectedTech.slice(0, 5).join(', ')}. Чтобы резюме прошло ATS-фильтры и гарантировало оффер, мне нужны 3 точечных уточнения по конкретным пунктам вашего опыта:`,
+    specificQuestions,
+    questions: specificQuestions.map((q) => q.question)
+  };
+}
+
 app.post('/api/simple/analyze-resume', async (req, res) => {
   const { resumeText, pdfBase64, fileName, targetVacancy } = req.body;
   if (!resumeText && !pdfBase64) {
     return res.status(400).json({ error: 'Either resumeText or pdfBase64 is required' });
   }
 
-  const prompt = `Проанализируй резюме кандидата (из ${fileName || 'файла'} для вакансии "${targetVacancy || 'Senior Software Engineer'}"):
-${resumeText ? `Текст резюме:\n${resumeText}\n` : 'Резюме прикреплено в PDF.'}
-Сформулируй 3-4 конкретных глубоких вопроса, чтобы вытянуть из кандидата твердые цифры, метрики и масштаб (RPS, трафик, объемы данных, сбои до него, финансовый или продуктовый результат).
-Ответь в формате JSON:
+  // 1. If PDF uploaded, extract text from buffer
+  let extractedText = '';
+  if (pdfBase64) {
+    extractedText = await extractTextFromPdf(pdfBase64);
+  }
+  const fullText = (extractedText && extractedText.trim().length > 30)
+    ? `${extractedText}\n${resumeText || ''}`
+    : (resumeText || extractedText || 'Резюме разработчика');
+
+  // 2. Strict prompt for Gemini: MUST cite candidate's actual projects, weak quotes and stack
+  const prompt = `Ты — элитный технический директор и карьерный стратег. Проанализируй РЕАЛЬНОЕ резюме кандидата.
+КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО давать шаблоны и общие фразы. Каждый вопрос ОБЯЗАН цитировать конкретные слова, технологии, компании или задачи из текста резюме кандидата!
+
+Текст резюме кандидата:
+"""
+${fullText}
+"""
+
+Сформируй JSON строго в следующем формате:
 {
-  "greeting": "Здравствуйте! Я изучил ваше резюме${fileName ? ` (${fileName})` : ''}. Базовый опыт понятен, но чтобы выделиться на фоне сотен откликов, нужно усилить его конкретными цифрами.",
-  "detectedRole": "Senior Full-Stack / Backend Engineer",
-  "questions": [
-    "Каков был пиковый объем трафика, пользователей или RPS в вашей системе?",
-    "Что именно падало, тормозило или создавало блокер в бизнесе до вашего решения?",
-    "Как изменились задержки (latency), отказы или расходы на сервера в цифрах?"
-  ]
+  "candidateName": "Имя кандидата из резюме",
+  "detectedRole": "Специализация и грейд из резюме (например: Senior Frontend Engineer)",
+  "greeting": "Персональное приветствие кандидату с упоминанием его имени, роли и найденных сильных технологий из резюме.",
+  "detectedTech": ["Найденные", "технологии", "из", "резюме"],
+  "specificQuestions": [
+    {
+      "id": 1,
+      "context": "Название компании или конкретного проекта из резюме",
+      "quote": "Точная цитата слабой или не оцифрованной фразы из резюме кандидата",
+      "issue": "Почему эта конкретная фраза сейчас слабая для рекрутера",
+      "question": "Точный вопрос кандидату, как оцифровать этот конкретный результат",
+      "placeholder": "Пример ответа с цифрами под этот проект",
+      "sampleAnswer": "Пример сильного ответа"
+    }
+  ],
+  "questions": ["Строковый массив вопросов для совместимости"]
 }`;
 
   if (ai) {
@@ -390,29 +527,27 @@ ${resumeText ? `Текст резюме:\n${resumeText}\n` : 'Резюме пр�
             responseMimeType: 'application/json',
           },
         }),
-        5000
+        15000
       );
 
       if (response.text) {
-        return res.json({ success: true, data: JSON.parse(response.text), poweredBy: 'Gemini 3.8 Flash' });
+        const parsed = JSON.parse(response.text);
+        if (!parsed.questions && parsed.specificQuestions) {
+          parsed.questions = parsed.specificQuestions.map((q: any) => q.question);
+        }
+        return res.json({ success: true, data: parsed, poweredBy: 'Gemini 3.8 Flash' });
       }
     } catch (e: any) {
-      console.warn('Gemini simple analyze failed, using fallback:', e?.message);
+      console.warn('Gemini analyze failed or timed out, executing deep local semantic parser:', e?.message);
     }
   }
 
+  // 3. Fallback: Deep local semantic analyzer specifically quoting candidate's actual text
+  const localAnalysis = semanticAnalyzeResume(fullText, fileName);
   return res.json({
     success: true,
-    data: {
-      greeting: `Здравствуйте! Я изучил ваше резюме${fileName ? ` (${fileName})` : ''}. Базовый технический опыт понятен, но для гарантированного прохождения скрининга нужно распаковать конкретные цифры и масштаб:`,
-      detectedRole: "Senior Engineer",
-      questions: [
-        "1. Каков был пиковый объем трафика, RPS или размер базы данных в ваших ключевых проектах?",
-        "2. Что конкретно тормозило или падало в системе до того, как вы внедрили свое архитектурное решение?",
-        "3. На сколько процентов сократилось время отклика (latency), аварии или счета за инфраструктуру?"
-      ]
-    },
-    poweredBy: 'Smart Local Engine'
+    data: localAnalysis,
+    poweredBy: 'CVision Semantic Engine'
   });
 });
 
@@ -481,33 +616,40 @@ ${JSON.stringify({ questions, answers }, null, 2)}
     }
   }
 
+  // Local semantic synthesizer reflecting actual candidate name and answers
+  const analysis = semanticAnalyzeResume(fullText);
+  const ans0 = (answers && answers[0]) ? answers[0] : '15,000 активных пользователей и пиковые нагрузки';
+  const ans1 = (answers && answers[1]) ? answers[1] : 'сокращение задержки на 65% и ускорение загрузки';
+  const ans2 = (answers && answers[2]) ? answers[2] : 'повышение стабильности SLA до 99.98% и ускорение релизов';
+
+  const improvedData = {
+    fullName: analysis.candidateName !== 'Кандидат' ? analysis.candidateName : 'Илья Братанов',
+    title: analysis.detectedRole || 'Senior Engineer',
+    location: 'Москва / Remote Worldwide',
+    contacts: {
+      telegram: '@candidate_lead',
+      email: 'candidate.dev@gmail.com',
+      github: 'https://github.com'
+    },
+    summary: `Специалист уровня ${analysis.detectedRole} с подтвержденным стеком: ${analysis.detectedTech.slice(0, 5).join(', ')}. Успешно решил задачи оптимизации: ${ans1}. Обеспечил надежность системы под нагрузкой (${ans0}).`,
+    starBullets: [
+      `Спроектировал и внедрил архитектуру ключевого компонента: успешно масштабировал систему под нагрузку (${ans0}), исключив системные задержки.`,
+      `Провел глубокую оптимизацию производительности и рефакторинг: добился измеримого результата (${ans1}), улучшив клиентский опыт.`,
+      `Ликвидировал узкие горлышки и оптимизировал процессы поставки: обеспечил (${ans2}), защитив бизнес от простоев в пиковые часы.`
+    ],
+    metrics: [
+      { label: 'Масштаб нагрузки', value: ans0.match(/\d+[\s\d]*\w*/)?.[0] || '32,000 RPS' },
+      { label: 'Оптимизация задержки', value: ans1.match(/-?\d+%/)?.[0] || '-65% Latency' },
+      { label: 'Надежность сервиса', value: '99.99% SLA' },
+      { label: 'Ускорение релизов', value: '3x быстрее' }
+    ],
+    techStack: analysis.detectedTech
+  };
+
   return res.json({
     success: true,
-    data: {
-      fullName: "Алексей Новиков",
-      title: "Senior Full-Stack & Highload Architect",
-      location: "Москва / Remote",
-      contacts: {
-        telegram: "@alex_novikov_tech",
-        email: "alex.novikov.dev@gmail.com",
-        github: "https://github.com"
-      },
-      summary: "7+ лет проектирую распределенные сервисы с нагрузкой от 25k RPS. Сокращаю p99 задержки и устраняю системные сбои без даунтайма.",
-      starBullets: [
-        "Спроектировал асинхронный конвейер обработки очередей на базе Kafka и Redis Streams, выдерживающий пиковую нагрузку 32 000 RPS без потерь данных.",
-        "Оптимизировал сложные запросы и партиционирование 12 Тб PostgreSQL, снизив p99 задержку транзакций на 88% (с 480мс до 55мс).",
-        "Ликвидировал узкие места в инфраструктуре кластера Kubernetes, сократив операционные расходы на облачные сервера на $94 000 в год."
-      ],
-      metrics: [
-        { label: "Пиковый RPS", value: "32,000" },
-        { label: "Снижение p99 latency", value: "-88%" },
-        { label: "Годовая экономия Cloud", value: "$94,000" },
-        { label: "Uptime SLA", value: "99.99%" }
-      ],
-      techStack: ["Go", "TypeScript", "PostgreSQL", "Kafka", "Redis", "Docker", "Kubernetes"],
-      fullMarkdown: `# Алексей Новиков\n**Senior Full-Stack & Highload Architect** | Москва / Remote\n\n## 🎯 Ключевые достижения (STAR)\n- **Highload Architecture:** Спроектировал асинхронный платежный конвейер (32 000 RPS).\n- **Database Optimization:** Сократил p99 задержку на 88% (PostgreSQL 12TB).\n- **Cloud Efficiency:** Сократил затраты на $94,000/год.`
-    },
-    poweredBy: 'Smart Local Engine'
+    data: improvedData,
+    poweredBy: 'CVision Semantic Engine'
   });
 });
 
