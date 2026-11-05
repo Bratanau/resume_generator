@@ -6,7 +6,6 @@ import {
   FileText, 
   Check, 
   Copy, 
-  ExternalLink, 
   Clock, 
   Flame, 
   Eye, 
@@ -19,13 +18,12 @@ import {
   FileCheck,
   X,
   FileUp,
-  RefreshCw,
+  Download,
   Sliders,
   CheckCircle,
   AlertCircle,
   Quote,
   Target,
-  Wand2,
   Tag
 } from 'lucide-react';
 import { triggerConfetti } from '../utils/helpers';
@@ -37,14 +35,13 @@ interface SpecificQuestion {
   issue: string;
   question: string;
   placeholder: string;
-  sampleAnswer?: string;
 }
 
 interface ChatMessage {
   id: string;
   sender: 'ai' | 'user';
   text: string;
-  type?: 'intro' | 'questions' | 'clarifications' | 'improved_resume' | 'regular';
+  type?: 'intro' | 'questions' | 'improved_resume' | 'regular';
   questionsData?: string[];
   specificQuestions?: SpecificQuestion[];
   detectedTech?: string[];
@@ -61,25 +58,39 @@ interface TrackingData {
   dwellSeconds?: number;
   device?: string;
   opensCount?: number;
+  maxScrollDepth?: number;
+  linkClicks?: number;
   heatmap?: { section: string; seconds: number; intensity: 'hot' | 'warm' | 'cold'; percentage: number }[];
+  recommendations?: { id: string; title: string; reason: string; prompt: string; accepted: boolean }[];
 }
 
 interface UploadedFile {
   name: string;
   sizeKb: number;
   base64?: string;
-  isSample?: boolean;
+  text?: string;
 }
 
 interface SimpleChatViewProps {
   onSwitchToOldVersion: () => void;
-  onOpenEmployerResume?: (id: string) => void;
 }
 
-export const SimpleChatView: React.FC<SimpleChatViewProps> = ({ 
-  onSwitchToOldVersion,
-  onOpenEmployerResume 
-}) => {
+async function readApiResponse(response: Response): Promise<Record<string, any>> {
+  let data: Record<string, any>;
+  try {
+    data = await response.json();
+  } catch {
+    throw new Error(`Сервер вернул некорректный ответ (HTTP ${response.status}).`);
+  }
+
+  if (!response.ok || data.success === false) {
+    throw new Error(data.error || data.detail || `Ошибка сервера (HTTP ${response.status}).`);
+  }
+
+  return data;
+}
+
+export const SimpleChatView: React.FC<SimpleChatViewProps> = ({ onSwitchToOldVersion }) => {
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       id: 'msg-1',
@@ -91,15 +102,14 @@ export const SimpleChatView: React.FC<SimpleChatViewProps> = ({
 
   const [uploadedFile, setUploadedFile] = useState<UploadedFile | null>(null);
   const [inputResumeText, setInputResumeText] = useState<string>('');
+  const [targetVacancy, setTargetVacancy] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(false);
-  const [currentStep, setCurrentStep] = useState<'upload' | 'answering' | 'clarification' | 'generated'>('upload');
+  const [currentStep, setCurrentStep] = useState<'upload' | 'answering' | 'generated'>('upload');
   
   // Questions and Answers state
   const [specificQuestions, setSpecificQuestions] = useState<SpecificQuestion[]>([]);
   const [pendingQuestions, setPendingQuestions] = useState<string[]>([]);
   const [answers, setAnswers] = useState<string[]>(['', '', '']);
-  const [clarificationQuestion, setClarificationQuestion] = useState<string>('');
-  const [clarificationAnswer, setClarificationAnswer] = useState<string>('');
   
   // Candidate metadata extracted from resume
   const [detectedCandidateName, setDetectedCandidateName] = useState<string>('');
@@ -112,6 +122,7 @@ export const SimpleChatView: React.FC<SimpleChatViewProps> = ({
   const [showTrackingMiniWindow, setShowTrackingMiniWindow] = useState<boolean>(false);
   const [copiedLink, setCopiedLink] = useState<boolean>(false);
   const [isRefreshingTracking, setIsRefreshingTracking] = useState<boolean>(false);
+  const [recommendationAnswers, setRecommendationAnswers] = useState<Record<string, string>>({});
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -127,7 +138,7 @@ export const SimpleChatView: React.FC<SimpleChatViewProps> = ({
     const interval = setInterval(async () => {
       try {
         const res = await fetch(`/api/simple/tracking/${trackingData.linkId}`);
-        const data = await res.json();
+        const data = await readApiResponse(res);
         if (data.success && data.tracking) {
           setTrackingData((prev) => {
             if (!prev) return prev;
@@ -136,8 +147,10 @@ export const SimpleChatView: React.FC<SimpleChatViewProps> = ({
               openedAt: data.tracking.firstOpenedAt || prev.openedAt,
               opensCount: data.tracking.opensCount || prev.opensCount,
               dwellSeconds: data.tracking.dwellSeconds || prev.dwellSeconds,
-              device: data.tracking.device || prev.device,
+              maxScrollDepth: data.tracking.maxScrollDepth ?? prev.maxScrollDepth,
+              linkClicks: data.tracking.linkClicks ?? prev.linkClicks,
               heatmap: data.tracking.heatmap || prev.heatmap,
+              recommendations: data.tracking.recommendations || prev.recommendations,
             };
           });
         }
@@ -154,48 +167,28 @@ export const SimpleChatView: React.FC<SimpleChatViewProps> = ({
     const file = e.target.files?.[0];
     if (!file) return;
 
+    if (file.size > 15 * 1024 * 1024) {
+      alert('Файл слишком большой. Максимальный размер — 15 МБ.');
+      e.target.value = '';
+      return;
+    }
+
     const sizeKb = Math.round(file.size / 1024);
     const reader = new FileReader();
-
-    reader.onload = (event) => {
-      const base64 = event.target?.result as string;
+    const isTextFile = file.name.toLowerCase().endsWith('.txt');
+    reader.onload = () => {
+      if (typeof reader.result !== 'string') {
+        alert('Не удалось прочитать файл.');
+        return;
+      }
       setUploadedFile({
         name: file.name,
         sizeKb: sizeKb || 1,
-        base64: base64,
-        isSample: false
+        ...(isTextFile ? { text: reader.result } : { base64: reader.result }),
       });
     };
-
-    reader.readAsDataURL(file);
-  };
-
-  // Pre-fill sample authentic developer PDF resume
-  const handleLoadSamplePdf = () => {
-    const sampleText = `Илья Братанов
-Senior Frontend & Full-Stack Engineer (React, TypeScript)
-Telegram: @ilya_bratanov | Email: ilya.bratanov.dev@gmail.com | GitHub: github.com/bratanov
-
-ОПЫТ РАБОТЫ:
-Fintech Global Trading (2022 — 2024) • Senior Frontend Developer
-- Разрабатывал веб-терминал трейдера на React 18, TypeScript и WebSockets для торговли криптовалютами.
-- Переписал глобальное состояние приложения с Redux на Zustand и оптимизировал рендеринг графиков TradingView.
-- Настраивал сборку проекта на Vite и оптимизировал CI/CD пайплайн в GitLab.
-
-E-Commerce Retail Platform (2020 — 2022) • Middle Frontend Developer
-- Занимался версткой и поддержкой каталога товаров и чекаута на Next.js и Tailwind CSS.
-- Исправлял баги в корзине покупок и оформлении заказов, подключал платежные шлюзы.
-
-СТЕК ТЕХНОЛОГИЙ:
-TypeScript, React 18, Next.js, Zustand, Redux Toolkit, WebSockets, Tailwind CSS, Vite, Node.js, REST API, Git.`;
-
-    setUploadedFile({
-      name: 'Resume_Ilya_Bratanov_Senior_Frontend.pdf',
-      sizeKb: 154,
-      base64: 'data:application/pdf;base64,JVBERi0xLjQKJcTl8uXrp/Og0MTGCjQgMCBvYmoKPDw...',
-      isSample: true,
-    });
-    setInputResumeText(sampleText);
+    if (isTextFile) reader.readAsText(file);
+    else reader.readAsDataURL(file);
   };
 
   // Step 1: Submit Resume (PDF or text) -> Get Deep Tailored Questions
@@ -226,17 +219,17 @@ TypeScript, React 18, Next.js, Zustand, Redux Toolkit, WebSockets, Tailwind CSS,
         body: JSON.stringify({
           pdfBase64: uploadedFile?.base64,
           fileName: fileName,
-          resumeText: inputResumeText || (uploadedFile?.isSample ? 'Senior Frontend Engineer, React, TypeScript, WebSockets' : ''),
-          targetVacancy: 'Senior Software Engineer',
+          resumeText: inputResumeText || uploadedFile?.text || '',
+          targetVacancy: targetVacancy.trim(),
         }),
       });
 
-      const resData = await res.json();
+      const resData = await readApiResponse(res);
       const aiData = resData.data || {};
 
       const detectedName = aiData.candidateName || 'Кандидат';
-      const role = aiData.detectedRole || 'Senior Engineer';
-      const techList = aiData.detectedTech || ['TypeScript', 'React'];
+      const role = aiData.detectedRole || 'Специализация не указана';
+      const techList = aiData.detectedTech || [];
       const questionsList = aiData.questions || [];
       const specQuestions: SpecificQuestion[] = aiData.specificQuestions || [];
 
@@ -251,7 +244,7 @@ TypeScript, React 18, Next.js, Zustand, Redux Toolkit, WebSockets, Tailwind CSS,
         id: `ai-${Date.now()}`,
         sender: 'ai',
         type: 'questions',
-        text: aiData.greeting || `Здравствуйте! Я изучил ваше резюме на позицию «${role}». Чтобы резюме выделилось среди других соискателей, я выделил 3 конкретных места из вашего опыта, требующих оцифровки:`,
+        text: aiData.greeting || `Я изучил резюме. Ответьте на вопросы по указанным кейсам и навыкам; не добавляйте неподтверждённые цифры.`,
         questionsData: questionsList,
         specificQuestions: specQuestions,
         detectedTech: techList,
@@ -263,57 +256,25 @@ TypeScript, React 18, Next.js, Zustand, Redux Toolkit, WebSockets, Tailwind CSS,
       setCurrentStep('answering');
     } catch (e) {
       console.error('Analyze resume error:', e);
+      setMessages((prev) => [...prev, {
+        id: `ai-error-${Date.now()}`,
+        sender: 'ai',
+        text: `Не удалось проанализировать резюме: ${e instanceof Error ? e.message : 'неизвестная ошибка'}`,
+      }]);
     } finally {
       setIsLoading(false);
     }
   };
 
-  // Quick fill tailored answers for this specific resume
-  const handleFillTailoredAnswers = () => {
-    if (specificQuestions.length > 0) {
-      const filled = specificQuestions.map((q) => q.sampleAnswer || '15,000 активных пользователей, снижение задержки на 65%');
-      setAnswers(filled);
-    } else {
-      setAnswers([
-        '12,000 тиков/сек в стакане через WebSockets, буферизация в Zustand, стабильные 60 FPS',
-        'Снизили время загрузки графиков на 65% (с 2.4с до 0.8с), размер бандла упал на 34%',
-        'Ликвидировали дедлоки и сбои чекаута в пиковые дни, подняли SLA до 99.99%'
-      ]);
-    }
-  };
-
-  // Quick fill individual question answer
-  const handleFillSingleAnswer = (index: number) => {
-    const updated = [...answers];
-    updated[index] = specificQuestions[index]?.sampleAnswer || 'Метрика оптимизирована на 65%, нагрузка 15k пользователей';
-    setAnswers(updated);
-  };
-
-  // Optional: Ask for further clarifications before final generation
-  const handleRequestClarification = () => {
-    const clarificationText = 'Дополнительное уточнение по вашему резюме: приходилось ли вам наставлять джуниоров, проводить код-ревью или принимать архитектурные решения по выбору библиотек? Опишите кратко, чтобы мы добавили лидерские метрики.';
-    setClarificationQuestion(clarificationText);
-    
-    const aiMsg: ChatMessage = {
-      id: `ai-clarify-${Date.now()}`,
-      sender: 'ai',
-      type: 'clarifications',
-      text: `Отличные ответы по проектам! Добавим еще одно точечное уточнение:\n\n${clarificationText}`,
-    };
-    setMessages((prev) => [...prev, aiMsg]);
-    setCurrentStep('clarification');
-  };
-
   // Step 2: Submit Answers -> Generate Improved Resume
   const handleSubmitAnswers = async () => {
-    const combinedAnswers = [...answers, clarificationAnswer].filter(Boolean);
-    if (combinedAnswers.length === 0) return;
+    if (pendingQuestions.length && !answers.some((answer) => answer.trim())) return;
 
     const userAnswersMsg: ChatMessage = {
       id: `usr-ans-${Date.now()}`,
       sender: 'user',
-      text: answers.map((ans, i) => `Ответ по задаче ${i + 1}: ${ans || 'Не замеряли'}`).join('\n\n') + 
-            (clarificationAnswer ? `\n\nЛидерство и процессы: ${clarificationAnswer}` : ''),
+      text: answers.filter((answer) => answer.trim())
+        .map((answer, index) => `Ответ по вопросу ${index + 1}: ${answer}`).join('\n\n'),
     };
     setMessages((prev) => [...prev, userAnswersMsg]);
     setIsLoading(true);
@@ -324,23 +285,24 @@ TypeScript, React 18, Next.js, Zustand, Redux Toolkit, WebSockets, Tailwind CSS,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           pdfBase64: uploadedFile?.base64,
-          resumeText: inputResumeText,
+          resumeText: inputResumeText || uploadedFile?.text || '',
           questions: pendingQuestions,
           specificQuestions: specificQuestions,
-          answers: answers,
-          targetVacancy: detectedRole || 'Senior Software Engineer',
+          answers,
+          targetVacancy: targetVacancy.trim() || detectedRole,
         }),
       });
 
-      const resData = await res.json();
+      const resData = await readApiResponse(res);
       const generated = resData.data;
+      if (!generated) throw new Error('Сервер не вернул готовое резюме.');
       setImprovedResume(generated);
 
       const aiGeneratedMsg: ChatMessage = {
         id: `ai-gen-${Date.now()}`,
         sender: 'ai',
         type: 'improved_resume',
-        text: `Готово, ${detectedCandidateName || 'коллега'}! Я полностью переписал формулировки из вашего резюме по международному стандарту STAR. Пассивные фразы заменены на сильные инженерные результаты с вашими цифрами. Нажмите кнопку «Сделать отклик», чтобы создать персональную страницу с трекингом открытия и тепловой картой.`,
+        text: `Готово, ${detectedCandidateName || 'коллега'}! Я подготовил структурированную версию на основе исходного резюме и ваших ответов. Проверьте каждый факт перед отправкой; неизвестные метрики не подставлялись.`,
         resumeData: generated,
       };
 
@@ -349,6 +311,11 @@ TypeScript, React 18, Next.js, Zustand, Redux Toolkit, WebSockets, Tailwind CSS,
       triggerConfetti();
     } catch (e) {
       console.error('Generate improved resume error:', e);
+      setMessages((prev) => [...prev, {
+        id: `ai-error-${Date.now()}`,
+        sender: 'ai',
+        text: `Не удалось улучшить резюме: ${e instanceof Error ? e.message : 'неизвестная ошибка'}`,
+      }]);
     } finally {
       setIsLoading(false);
     }
@@ -356,39 +323,30 @@ TypeScript, React 18, Next.js, Zustand, Redux Toolkit, WebSockets, Tailwind CSS,
 
   // Step 3: Click "Make Apply" -> Generate Unique Tracking Link
   const handleCreateApplyLink = async () => {
+    if (!improvedResume) {
+      setMessages((prev) => [...prev, {
+        id: `ai-error-${Date.now()}`,
+        sender: 'ai',
+        text: 'Сначала сформируйте резюме на основе исходного файла и ваших ответов.',
+      }]);
+      return;
+    }
     setIsLoading(true);
     try {
       const res = await fetch('/api/simple/create-apply-link', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          improvedResume: improvedResume || {
-            fullName: detectedCandidateName || 'Илья Братанов',
-            title: detectedRole || 'Senior Frontend & Full-Stack Engineer',
-            location: 'Москва / Remote Worldwide',
-            summary: 'Специалист по high-load интерфейсам и архитектуре состояния. Сокращаю задержки рендеринга и выдерживаю поток до 15 000 тиков/сек.',
-            contacts: { telegram: '@candidate_lead', email: 'candidate.dev@gmail.com', github: 'https://github.com' },
-            starBullets: [
-              'Спроектировал клиентскую архитектуру веб-терминала: интегрировал буферизацию потока WebSockets (12 000 тиков/сек) через requestAnimationFrame, исключив микрофризы (стабильные 60 FPS).',
-              'Переписал глобальное состояние с Redux на Zustand и оптимизировал графики TradingView: снизил время загрузки на 65% (с 2.4с до 0.8с) и сократил размер бандла на 34%.',
-              'Оптимизировал процессы выкатки и чекаут: ликвидировал сбои при пиковом трафике, подняв SLA до 99.99%.'
-            ],
-            metrics: [
-              { label: 'Поток событий', value: '12,000/с' },
-              { label: 'Ускорение рендера', value: '-65%' },
-              { label: 'Размер бандла', value: '-34%' },
-              { label: 'Uptime SLA', value: '99.99%' },
-            ],
-            techStack: detectedTech.length > 0 ? detectedTech : ['TypeScript', 'React 18', 'Next.js', 'Zustand', 'WebSockets', 'Tailwind']
-          },
-          companyName: 'IT Работодатель',
-          candidateName: detectedCandidateName || improvedResume?.fullName || 'Илья Братанов',
+          improvedResume,
+          candidateName: detectedCandidateName || improvedResume.fullName,
         }),
       });
 
-      const data = await res.json();
+      const data = await readApiResponse(res);
+      if (!data.linkId) throw new Error('Сервер не вернул ссылку для отклика.');
+
       const localOrigin = window.location.origin;
-      const shareUrl = `${localOrigin}/?r=${data.linkId}`;
+      const shareUrl = data.shareUrl || `${localOrigin}/?r=${data.linkId}`;
 
       const now = new Date();
       const dateStr = now.toLocaleDateString('ru-RU');
@@ -399,15 +357,10 @@ TypeScript, React 18, Next.js, Zustand, Redux Toolkit, WebSockets, Tailwind CSS,
         shareUrl: shareUrl,
         createdAt: `${dateStr} в ${timeStr}`,
         openedAt: undefined,
-        dwellSeconds: 142,
+        dwellSeconds: 0,
         opensCount: 0,
-        device: 'Desktop Chrome 124 (macOS)',
-        heatmap: [
-          { section: 'Ключевые достижения (STAR) и метрики', seconds: 72, intensity: 'hot', percentage: 52 },
-          { section: 'Технологический стек и архитектура', seconds: 38, intensity: 'warm', percentage: 27 },
-          { section: 'Контакты и шапка профиля', seconds: 24, intensity: 'warm', percentage: 17 },
-          { section: 'Образование и курсы', seconds: 4, intensity: 'cold', percentage: 4 },
-        ],
+        heatmap: [],
+        recommendations: [],
       };
 
       setTrackingData(trackingObj);
@@ -415,6 +368,11 @@ TypeScript, React 18, Next.js, Zustand, Redux Toolkit, WebSockets, Tailwind CSS,
       triggerConfetti();
     } catch (e) {
       console.error('Create apply link error:', e);
+      setMessages((prev) => [...prev, {
+        id: `ai-error-${Date.now()}`,
+        sender: 'ai',
+        text: `Не удалось создать ссылку: ${e instanceof Error ? e.message : 'неизвестная ошибка'}`,
+      }]);
     } finally {
       setIsLoading(false);
     }
@@ -427,30 +385,44 @@ TypeScript, React 18, Next.js, Zustand, Redux Toolkit, WebSockets, Tailwind CSS,
     setTimeout(() => setCopiedLink(false), 2000);
   };
 
-  // Simulate or test employer open
-  const handleSimulateEmployerOpen = async () => {
+  const handleDownloadResumeHtml = () => {
+    if (!improvedResume?.html) return;
+    const url = URL.createObjectURL(new Blob([improvedResume.html], { type: 'text/html;charset=utf-8' }));
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `${improvedResume.fullName || 'resume'}.html`;
+    anchor.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+
+  const handleAcceptRecommendation = async (recommendationId: string) => {
     if (!trackingData?.linkId) return;
     setIsRefreshingTracking(true);
-
     try {
-      const res = await fetch(`/api/simple/record-open/${trackingData.linkId}`, { method: 'POST' });
-      const data = await res.json();
-      
-      const now = new Date();
-      const dateStr = now.toLocaleDateString('ru-RU');
-      const timeStr = now.toLocaleTimeString('ru-RU');
-
-      setTrackingData((prev) => {
-        if (!prev) return prev;
-        return {
-          ...prev,
-          openedAt: data.openedAt || `${dateStr} в ${timeStr}`,
-          opensCount: (prev.opensCount || 0) + 1,
-        };
+      const response = await fetch(`/api/simple/recommendations/${trackingData.linkId}/accept`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          recommendationId,
+          text: recommendationAnswers[recommendationId] || '',
+        }),
       });
-      triggerConfetti();
-    } catch (err) {
-      console.error(err);
+      const result = await readApiResponse(response);
+      setImprovedResume(result.resume);
+      setMessages((prev) => prev.map((message) => message.type === 'improved_resume'
+        ? { ...message, resumeData: result.resume }
+        : message));
+      setTrackingData((prev) => prev ? {
+        ...prev,
+        recommendations: prev.recommendations?.filter((item) => item.id !== recommendationId),
+      } : prev);
+    } catch (error) {
+      console.error('Accept resume recommendation error:', error);
+      setMessages((prev) => [...prev, {
+        id: `ai-error-${Date.now()}`,
+        sender: 'ai',
+        text: `Не удалось обновить резюме: ${error instanceof Error ? error.message : 'неизвестная ошибка'}`,
+      }]);
     } finally {
       setIsRefreshingTracking(false);
     }
@@ -542,14 +514,6 @@ TypeScript, React 18, Next.js, Zustand, Redux Toolkit, WebSockets, Tailwind CSS,
                         </span>
                       </div>
 
-                      <button
-                        type="button"
-                        onClick={handleFillTailoredAnswers}
-                        className="text-xs font-bold text-blue-600 hover:text-blue-700 flex items-center gap-1 cursor-pointer"
-                      >
-                        <Wand2 className="w-3.5 h-3.5" />
-                        <span>Заполнить примеры под мое резюме</span>
-                      </button>
                     </div>
 
                     {/* Tech tags found in the actual resume */}
@@ -567,7 +531,7 @@ TypeScript, React 18, Next.js, Zustand, Redux Toolkit, WebSockets, Tailwind CSS,
 
                   <span className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5 pt-1">
                     <HelpCircle className="w-3.5 h-3.5 text-blue-600" />
-                    <span>Вопросы по конкретным пунктам вашего опыта:</span>
+                    <span>{pendingQuestions.length ? 'Уточнения по пунктам, которым не хватает деталей:' : 'В резюме не нашлось пробелов, требующих уточнений.'}</span>
                   </span>
 
                   {/* Individual Question Cards */}
@@ -594,7 +558,7 @@ TypeScript, React 18, Next.js, Zustand, Redux Toolkit, WebSockets, Tailwind CSS,
                               <Quote className="w-3.5 h-3.5 text-blue-500 mt-0.5 shrink-0" />
                               <div>
                                 <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider block">
-                                  Цитата из вашего резюме:
+                                  Фрагмент или контекст из вашего резюме:
                                 </span>
                                 <span className="text-xs text-slate-800 italic font-medium">
                                   {spec.quote}
@@ -630,59 +594,27 @@ TypeScript, React 18, Next.js, Zustand, Redux Toolkit, WebSockets, Tailwind CSS,
                             className="w-full text-xs p-2.5 rounded-xl bg-white border border-slate-300 text-slate-900 focus:outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-600"
                           />
 
-                          {spec?.sampleAnswer && !answers[idx] && (
-                            <button
-                              type="button"
-                              onClick={() => handleFillSingleAnswer(idx)}
-                              className="text-[10px] text-blue-600 hover:text-blue-700 font-semibold flex items-center gap-1 cursor-pointer"
-                            >
-                              <span>+ Вставить пример ответа под эту задачу</span>
-                            </button>
-                          )}
                         </div>
                       </div>
                     );
                   })}
 
+                  {!pendingQuestions.length && (
+                    <p className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs leading-relaxed text-emerald-900">
+                      Опыт выглядит достаточно полным. Можно сразу перейти к оформлению HTML-резюме.
+                    </p>
+                  )}
+
                   <div className="flex flex-col sm:flex-row items-center gap-2 pt-2">
                     <button
                       onClick={handleSubmitAnswers}
-                      disabled={isLoading || !answers.some((a) => a.trim())}
+                      disabled={isLoading || (pendingQuestions.length > 0 && !answers.some((a) => a.trim()))}
                       className="w-full sm:flex-1 py-3 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-sm transition disabled:opacity-50 cursor-pointer"
                     >
                       <Sparkles className="w-4 h-4" />
-                      <span>Собрать итоговое резюме по стандарту STAR</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={handleRequestClarification}
-                      className="w-full sm:w-auto px-4 py-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs transition cursor-pointer"
-                    >
-                      <span>Уточнить еще детали</span>
+                      <span>{pendingQuestions.length ? 'Собрать резюме с учетом ответов' : 'Сразу оформить HTML-резюме'}</span>
                     </button>
                   </div>
-                </div>
-              )}
-
-              {/* Step 2b: Additional Clarification Step */}
-              {msg.type === 'clarifications' && currentStep === 'clarification' && (
-                <div className="mt-3 pt-3 border-t border-slate-200 space-y-2.5">
-                  <input
-                    type="text"
-                    placeholder="Например: Проводил архитектурные ревью, менторил 2 джунов, ускорил онбординг с 3 недель до 5 дней..."
-                    value={clarificationAnswer}
-                    onChange={(e) => setClarificationAnswer(e.target.value)}
-                    className="w-full text-xs p-2.5 rounded-lg bg-slate-50 border border-slate-300 text-slate-900 focus:outline-none focus:border-blue-600"
-                  />
-                  <button
-                    onClick={handleSubmitAnswers}
-                    disabled={isLoading}
-                    className="w-full py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-sm transition cursor-pointer"
-                  >
-                    <Sparkles className="w-4 h-4" />
-                    <span>Собрать итоговое резюме с учетом всех деталей</span>
-                  </button>
                 </div>
               )}
 
@@ -692,16 +624,16 @@ TypeScript, React 18, Next.js, Zustand, Redux Toolkit, WebSockets, Tailwind CSS,
                   <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-xs space-y-4">
                     <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 border-b border-slate-100 pb-3">
                       <div>
+                        {msg.resumeData.photo && (
+                          <img src={msg.resumeData.photo} alt="Фото из исходного резюме" className="mb-3 h-16 w-16 rounded-xl object-cover border border-slate-200" />
+                        )}
                         <div className="flex items-center gap-2">
                           <h3 className="font-extrabold text-lg text-slate-900">
-                            {msg.resumeData.fullName}
+                            {msg.resumeData.fullName || 'Имя не найдено в исходном резюме'}
                           </h3>
-                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
-                            STAR Verified
-                          </span>
                         </div>
                         <p className="text-xs font-bold text-blue-600 mt-0.5">
-                          {msg.resumeData.title}
+                          {msg.resumeData.title || 'Специализация не указана'}
                         </p>
                         <p className="text-[11px] text-slate-400">
                           📍 {msg.resumeData.location}
@@ -709,13 +641,27 @@ TypeScript, React 18, Next.js, Zustand, Redux Toolkit, WebSockets, Tailwind CSS,
                       </div>
 
                       {/* Contacts */}
-                      <div className="flex items-center gap-2 text-xs">
-                        <span className="text-slate-600 bg-slate-50 px-2 py-1 rounded-md border border-slate-200 text-[11px]">
-                          {msg.resumeData.contacts?.telegram || '@candidate_lead'}
-                        </span>
-                        <span className="text-slate-600 bg-slate-50 px-2 py-1 rounded-md border border-slate-200 text-[11px]">
-                          {msg.resumeData.contacts?.email || 'candidate.dev@gmail.com'}
-                        </span>
+                      <div className="flex flex-wrap items-center gap-2 text-xs">
+                        {msg.resumeData.contacts?.telegram && (
+                          <a href={`https://t.me/${msg.resumeData.contacts.telegram.replace('@', '')}`} target="_blank" rel="noreferrer" className="text-blue-700 underline">
+                            {msg.resumeData.contacts.telegram}
+                          </a>
+                        )}
+                        {msg.resumeData.contacts?.email && (
+                          <a href={`mailto:${msg.resumeData.contacts.email}`} className="text-blue-700 underline">
+                            {msg.resumeData.contacts.email}
+                          </a>
+                        )}
+                        {msg.resumeData.contacts?.phone && (
+                          <a href={`tel:${msg.resumeData.contacts.phone.replace(/[^\d+]/g, '')}`} className="text-blue-700 underline">
+                            {msg.resumeData.contacts.phone}
+                          </a>
+                        )}
+                        {msg.resumeData.links?.map((link: { url: string; label: string }, index: number) => (
+                          <a key={`${link.url}-${index}`} href={link.url} target="_blank" rel="noreferrer" className="text-blue-700 underline">
+                            {link.label}
+                          </a>
+                        ))}
                       </div>
                     </div>
 
@@ -781,13 +727,23 @@ TypeScript, React 18, Next.js, Zustand, Redux Toolkit, WebSockets, Tailwind CSS,
                       </div>
                     </div>
 
-                    <button
-                      onClick={handleCreateApplyLink}
-                      className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-sm transition whitespace-nowrap cursor-pointer"
-                    >
-                      <span>Сделать отклик</span>
-                      <ArrowRight className="w-4 h-4" />
-                    </button>
+                    <div className="flex w-full flex-col gap-2 sm:w-auto">
+                      <button
+                        type="button"
+                        onClick={handleDownloadResumeHtml}
+                        className="w-full px-4 py-2.5 rounded-xl bg-white hover:bg-emerald-100 text-emerald-900 border border-emerald-300 font-bold text-xs flex items-center justify-center gap-2"
+                      >
+                        <Download className="w-4 h-4" />
+                        <span>Скачать HTML</span>
+                      </button>
+                      <button
+                        onClick={handleCreateApplyLink}
+                        className="w-full px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-sm transition whitespace-nowrap cursor-pointer"
+                      >
+                        <span>Создать ссылку резюме</span>
+                        <ArrowRight className="w-4 h-4" />
+                      </button>
+                    </div>
                   </div>
                 </div>
               )}
@@ -808,7 +764,7 @@ TypeScript, React 18, Next.js, Zustand, Redux Toolkit, WebSockets, Tailwind CSS,
             </div>
             <div className="bg-white border border-slate-200 rounded-2xl rounded-tl-none p-3.5 text-xs text-slate-600 flex items-center gap-2 shadow-xs">
               <span className="w-3.5 h-3.5 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
-              <span>Gemini читает текст резюме и формулирует вопросы по вашим проектам...</span>
+              <span>Читаю резюме и готовлю вопросы по вашему опыту...</span>
             </div>
           </div>
         )}
@@ -861,31 +817,6 @@ TypeScript, React 18, Next.js, Zustand, Redux Toolkit, WebSockets, Tailwind CSS,
             </div>
           </div>
 
-          {/* Test Link Employer Buttons */}
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => {
-                if (onOpenEmployerResume) {
-                  onOpenEmployerResume(trackingData.linkId);
-                } else {
-                  window.open(trackingData.shareUrl, '_blank');
-                }
-              }}
-              className="flex-1 py-2 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer"
-            >
-              <ExternalLink className="w-3.5 h-3.5 text-blue-600" />
-              <span>Открыть глазами работодателя</span>
-            </button>
-            <button
-              onClick={handleSimulateEmployerOpen}
-              disabled={isRefreshingTracking}
-              className="py-2 px-3 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-xs font-semibold flex items-center gap-1.5 border border-emerald-200 transition cursor-pointer"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${isRefreshingTracking ? 'animate-spin' : ''}`} />
-              <span>Тест открытия</span>
-            </button>
-          </div>
-
           {/* Brief Summary Box */}
           <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 space-y-2 text-xs">
             <div className="flex items-center justify-between">
@@ -906,17 +837,21 @@ TypeScript, React 18, Next.js, Zustand, Redux Toolkit, WebSockets, Tailwind CSS,
             </div>
 
             <div className="flex items-center justify-between">
-              <span className="text-slate-500">Устройство работодателя:</span>
+              <span className="text-slate-500">Глубина просмотра:</span>
               <span className="text-slate-700 font-medium">
-                {trackingData.device || 'Desktop Chrome'}
+                {trackingData.maxScrollDepth ?? 0}%
               </span>
             </div>
 
             <div className="flex items-center justify-between">
               <span className="text-slate-500">Время чтения (Dwell time):</span>
               <span className="font-bold text-blue-600">
-                {trackingData.dwellSeconds ? `${trackingData.dwellSeconds} сек (~2.4 мин)` : '—'}
+                {trackingData.dwellSeconds ? `${trackingData.dwellSeconds} сек` : 'Пока нет данных'}
               </span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-slate-500">Переходы по ссылкам:</span>
+              <span className="font-bold text-slate-800">{trackingData.linkClicks || 0}</span>
             </div>
           </div>
 
@@ -931,7 +866,7 @@ TypeScript, React 18, Next.js, Zustand, Redux Toolkit, WebSockets, Tailwind CSS,
             </div>
 
             <div className="space-y-2 text-xs">
-              {trackingData.heatmap?.map((item, idx) => (
+              {trackingData.heatmap?.length ? trackingData.heatmap.map((item, idx) => (
                 <div key={idx} className="space-y-1">
                   <div className="flex justify-between text-slate-700 text-[11px]">
                     <span className="font-medium truncate max-w-[220px]">{item.section}</span>
@@ -950,9 +885,41 @@ TypeScript, React 18, Next.js, Zustand, Redux Toolkit, WebSockets, Tailwind CSS,
                     />
                   </div>
                 </div>
-              ))}
+              )) : <p className="text-xs text-slate-500">Тепловая карта появится после просмотра резюме.</p>}
             </div>
           </div>
+
+          {(trackingData.recommendations?.length || 0) > 0 && (
+            <section className="space-y-3 border-t border-slate-100 pt-4">
+              <h5 className="text-xs font-bold text-slate-800">Рекомендации по улучшению</h5>
+              {trackingData.recommendations?.map((recommendation) => (
+                <div key={recommendation.id} className="space-y-2 rounded-xl border border-amber-200 bg-amber-50 p-3">
+                  <p className="text-xs font-bold text-slate-800">{recommendation.title}</p>
+                  <p className="text-[11px] leading-relaxed text-slate-600">{recommendation.reason}</p>
+                  <p className="text-[11px] text-slate-700">{recommendation.prompt}</p>
+                  {recommendation.id === 'add-result-0' && (
+                    <textarea
+                      value={recommendationAnswers[recommendation.id] || ''}
+                      onChange={(event) => setRecommendationAnswers((prev) => ({
+                        ...prev,
+                        [recommendation.id]: event.target.value,
+                      }))}
+                      placeholder="Добавьте только результат, который можете подтвердить"
+                      className="w-full rounded-lg border border-slate-300 bg-white p-2 text-xs text-slate-900"
+                    />
+                  )}
+                  <button
+                    type="button"
+                    disabled={isRefreshingTracking || (recommendation.id === 'add-result-0' && !recommendationAnswers[recommendation.id]?.trim())}
+                    onClick={() => handleAcceptRecommendation(recommendation.id)}
+                    className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
+                  >
+                    Добавить результат в резюме
+                  </button>
+                </div>
+              ))}
+            </section>
+          )}
         </div>
       )}
 
@@ -968,12 +935,12 @@ TypeScript, React 18, Next.js, Zustand, Redux Toolkit, WebSockets, Tailwind CSS,
                 </div>
                 <div>
                   <div className="text-xs font-bold text-slate-900">
-                    {uploadedFile ? uploadedFile.name : 'Загрузите резюме в формате PDF'}
+                    {uploadedFile ? uploadedFile.name : 'Загрузите свое резюме'}
                   </div>
                   <div className="text-[11px] text-slate-500">
                     {uploadedFile 
                       ? `${uploadedFile.sizeKb} KB • Готово к анализу` 
-                      : 'Принимаются .pdf файлы (а также .txt и текст)'}
+                      : 'PDF с текстом и фотографией, TXT или текст резюме'}
                   </div>
                 </div>
               </div>
@@ -993,15 +960,7 @@ TypeScript, React 18, Next.js, Zustand, Redux Toolkit, WebSockets, Tailwind CSS,
                   className="px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer"
                 >
                   <Upload className="w-3.5 h-3.5" />
-                  <span>{uploadedFile ? 'Заменить PDF' : 'Выбрать PDF файл'}</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={handleLoadSamplePdf}
-                  className="px-3 py-2 rounded-xl bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 text-xs font-semibold transition cursor-pointer whitespace-nowrap"
-                >
-                  ⚡ Демо PDF
+                  <span>{uploadedFile ? 'Заменить файл' : 'Выбрать файл'}</span>
                 </button>
 
                 {uploadedFile && (
@@ -1032,7 +991,7 @@ TypeScript, React 18, Next.js, Zustand, Redux Toolkit, WebSockets, Tailwind CSS,
                     handleAnalyzeResume();
                   }
                 }}
-                placeholder={uploadedFile ? "Файл прикреплен. Можно добавить комментарий к вакансии..." : "Или вставьте текст резюме сюда..."}
+                placeholder={uploadedFile ? "Добавьте недостающие факты из резюме..." : "Или вставьте текст резюме сюда..."}
                 className="flex-1 bg-transparent text-xs sm:text-sm text-slate-900 placeholder-slate-400 p-2 outline-none resize-none leading-relaxed"
               />
 
@@ -1044,6 +1003,13 @@ TypeScript, React 18, Next.js, Zustand, Redux Toolkit, WebSockets, Tailwind CSS,
                 <Send className="w-4 h-4 ml-0.5" />
               </button>
             </div>
+            <input
+              type="text"
+              value={targetVacancy}
+              onChange={(event) => setTargetVacancy(event.target.value)}
+              placeholder="Целевая вакансия (необязательно)"
+              className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-800 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none"
+            />
           </div>
         </div>
       )}

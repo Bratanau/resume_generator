@@ -43,10 +43,6 @@ export default function App() {
   }
 
   return (
-    <SimpleChatView 
-      onSwitchToOldVersion={() => setAppVersion('old')}
-      onOpenEmployerResume={(id) => setResumeLinkId(id)}
-    />
+    <SimpleChatView onSwitchToOldVersion={() => setAppVersion('old')} />
   );
 }
-

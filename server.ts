@@ -4,6 +4,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI } from '@google/genai';
 import { createRequire } from 'module';
+import { randomUUID } from 'node:crypto';
 
 const require = createRequire(import.meta.url);
 const { PDFParse } = require('pdf-parse');
@@ -16,7 +17,7 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const port = 3000;
 
-app.use(express.json({ limit: '20mb' }));
+app.use(express.json({ limit: '24mb' }));
 
 // Initialize GoogleGenAI SDK server-side
 const apiKey = process.env.GEMINI_API_KEY;
@@ -44,20 +45,32 @@ function withTimeout<T>(promise: Promise<T>, ms: number = 15000): Promise<T> {
   ]);
 }
 
-// Helper: extract raw text from PDF Base64 safely
-async function extractTextFromPdf(base64?: string): Promise<string> {
-  if (!base64 || typeof base64 !== 'string' || base64.length < 100) return '';
+async function extractPdfContent(base64?: string): Promise<{ text: string; photo?: string }> {
+  if (!base64 || typeof base64 !== 'string') return { text: '' };
+  const cleanBase64 = base64.includes(',') ? base64.slice(base64.indexOf(',') + 1) : base64;
+  const buffer = Buffer.from(cleanBase64, 'base64');
+  if (buffer.length < 100) return { text: '' };
+
+  const parser = new PDFParse({ data: buffer });
   try {
-    const cleanBase64 = base64.includes(',') ? base64.split(',')[1] : base64;
-    const buffer = Buffer.from(cleanBase64, 'base64');
-    if (buffer.length < 100) return '';
-    const parser = new PDFParse({ data: buffer });
     await parser.load();
-    const result = await parser.getText();
+    const textResult = await parser.getText({ parseHyperlinks: true });
+    let photo: string | undefined;
+    try {
+      const imageResult = await parser.getImage({ first: 1, imageThreshold: 50, imageDataUrl: true, imageBuffer: false });
+      const images = imageResult.pages[0]?.images || [];
+      photo = images
+        .filter((image: { dataUrl?: string; width: number; height: number }) => image.dataUrl && image.width > 80 && image.height > 80)
+        .sort((a: { width: number; height: number }, b: { width: number; height: number }) => b.width * b.height - a.width * a.height)[0]?.dataUrl;
+    } catch (error) {
+      console.warn('Could not extract a photo from the resume PDF:', error);
+    }
+    return { text: textResult.text || '', photo };
+  } catch (error) {
+    console.warn('Could not parse uploaded resume PDF:', error);
+    return { text: '' };
+  } finally {
     await parser.destroy();
-    return typeof result === 'string' ? result : (result?.text || '');
-  } catch (err) {
-    return '';
   }
 }
 
@@ -371,20 +384,20 @@ app.get('/api/telemetry/sessions', (req, res) => {
 const simpleTrackingStore: Record<string, any> = {};
 
 // Semantic resume parser for personalized analysis citing the candidate's actual text
-function semanticAnalyzeResume(text: string, fileName?: string) {
-  const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
+function semanticAnalyzeResume(text: string, fileName?: string): Record<string, any> {
+  const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   
   // Extract Name (first line usually, if not a keyword)
   let candidateName = 'Кандидат';
   for (const line of lines.slice(0, 3)) {
-    if (!/опыт|резюме|resume|cv|контакты|skills|навыки|телефон|email|http|город/i.test(line) && line.length > 3 && line.length < 40) {
+    if (!/опыт|резюме|resume|cv|контакты|skills|навыки|телефон|email|http|город|engineer|developer|разработчик|инженер/i.test(line) && line.length > 3 && line.length < 60) {
       candidateName = line.replace(/^[#*\-•\d.]+\s*/, '').trim();
       break;
     }
   }
 
   // Extract Role
-  let detectedRole = 'Senior Software Engineer';
+  let detectedRole = '';
   const roleLine = lines.find((l) => /frontend|backend|full-?stack|разработчик|инженер|architect|lead|devops|qa|mobile|ios|android|data/i.test(l));
   if (roleLine) {
     detectedRole = roleLine.replace(/^[#*\-•\d.]+\s*/, '').split(/[|,]/)[0].trim();
@@ -401,64 +414,157 @@ function semanticAnalyzeResume(text: string, fileName?: string) {
     const escaped = tech.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     return new RegExp(`(?:^|[^a-zA-Z0-9_])${escaped}(?:$|[^a-zA-Z0-9_])`, 'i').test(text);
   });
-  if (detectedTech.length === 0) {
-    detectedTech.push('TypeScript', 'React', 'Node.js', 'PostgreSQL');
-  }
-
   // Find candidate's actual bullet points or experience sentences
   const rawBullets = lines.filter((l) => 
     /^[-•*–—]/.test(l) || 
-    /разрабатывал|оптимизировал|переписал|настраивал|занимался|исправлял|внедрил|создал|участвовал|поддерживал|developed|implemented|optimized|maintained|built/i.test(l)
+    /работал|работала|работали|разрабатыва(?:л|ла|ли|ю)|оптимизирова(?:л|ла|ли)|оптимизирую|переписа(?:л|ла|ли)|настраива(?:л|ла|ли)|занима(?:лся|лась|лись)|исправля(?:л|ла|ли)|внедри(?:л|ла|ли)|созда(?:л|ла|ли)|участвова(?:л|ла|ли)|поддержива(?:л|ла|ли)|\b(?:develop(?:ed|ing)?|implement(?:ed|ing)?|optimiz(?:ed|ing)|maintain(?:ed|ing)|build(?:ing)?|built|work(?:ed|ing)|lead|led|manag(?:ed|ing)|design(?:ed|ing)|creat(?:ed|ing)|launch(?:ed|ing)|reduc(?:ed|ing)|increas(?:ed|ing)|deliver(?:ed|ing)|improv(?:ed|ing)|support(?:ed|ing)|own(?:ed|ing))\b/i.test(l)
   ).map((b) => b.replace(/^[-•*–—\d.]+\s*/, '').trim()).filter((b) => b.length > 20);
+  const actualBullets = rawBullets;
+  const emails = [...new Set(text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) || [])];
+  const links = [...new Set(text.match(/(?:https?:\/\/|www\.|mailto:|tel:)[^\s<>()]+/gi) || [])]
+    .map((url) => url.replace(/[.,;]+$/, ''))
+    .map((url) => ({
+      label: url.replace(/^https?:\/\/(www\.)?/, '').replace(/\/$/, ''),
+      url: /^(?:https?:|mailto:|tel:)/i.test(url) ? url : `https://${url}`,
+    }));
+  const telegramName = text.match(/(?:t\.me\/|telegram(?:\s*:\s*)?)(@[A-Z0-9_]{3,}|[A-Z0-9_]{3,})/i)?.[1];
+  const contacts = {
+    email: emails[0] || '',
+    telegram: telegramName ? (telegramName.startsWith('@') ? telegramName : `@${telegramName}`) : '',
+    github: links.find((link) => /github\.com/i.test(link.url))?.url || '',
+    phone: lines.find((line) => /телефон|phone|mobile/i.test(line))?.match(/\+?[\d(][\d\s().-]{7,}\d/)?.[0] || '',
+  };
+  const location = lines.find((line) => /^(?:город|место жительства|локация|location)\s*[:—-]/i.test(line))
+    ?.replace(/^(?:город|место жительства|локация|location)\s*[:—-]\s*/i, '') || '';
 
-  // Fallback bullets if resume text is brief
-  const sampleBullets = [
-    lines[2] || 'Разработка и проектирование пользовательских интерфейсов и клиентской архитектуры',
-    lines[3] || 'Оптимизация производительности компонентов и сетевого взаимодействия',
-    lines[4] || 'Настройка процесса сборки проекта и автоматизации CI/CD'
-  ];
-
-  const actualBullets = rawBullets.length >= 2 ? rawBullets : sampleBullets;
-
-  // Build 3 deeply tailored questions citing the candidate's exact sentences
-  const specificQuestions = [
-    {
+  const specificQuestions: Array<{ id: number; context: string; quote: string; issue: string; question: string; placeholder: string }> = [];
+  if (!actualBullets.length) {
+    specificQuestions.push({
       id: 1,
-      context: 'Ключевой проект / Задача 1',
-      quote: `«${actualBullets[0] || 'Разработка основного функционала сервиса'}»`,
-      issue: 'Формулировка описывает действие, но не показывает масштаб вашей личной ответственности и нагрузку на систему.',
-      question: `В пункте «${(actualBullets[0] || '').slice(0, 60)}...» вы описали реализацию задачи. Каков был реальный масштаб (RPS, число пользователей, объем данных или частота вызовов) и с какими архитектурными сложностями вы столкнулись?`,
-      placeholder: 'Например: 15,000 активных пользователей, пик до 8,000 запросов/сек, изолировали микросервис...',
-      sampleAnswer: 'Обслуживали 15 000 активных пользователей, выдерживали до 8 000 запросов/сек без задержек.'
-    },
-    {
-      id: 2,
-      context: 'Оптимизация и технологии',
-      quote: `«${actualBullets[1] || 'Оптимизация производительности и рефакторинг'}»`,
-      issue: 'Не указаны измеримые метрики «до и после». Рекрутеры ищут доказательства инженерной зрелости в миллисекундах или процентах.',
-      question: `Вы упомянули работу над «${(actualBullets[1] || '').slice(0, 55)}...». Как именно изменились метрики эффективности (latency/FPS, потребление памяти, скорость сборки или время отклика) в цифрах?`,
-      placeholder: 'Например: снизили задержку на 65% (с 380мс до 130мс), время сборки сократилось в 2 раза...',
-      sampleAnswer: 'Снизили время загрузки страницы на 58% (с 3.2с до 1.3с), сократили потребление памяти на 40%.'
-    },
-    {
-      id: 3,
-      context: 'Бизнес-результат и надежность',
-      quote: `«${actualBullets[2] || actualBullets[0] || 'Поддержка и развитие сервиса'}»`,
-      issue: 'Звучит как рутинная поддержка без оцифрованного влияния на бизнес или процессы команды.',
-      question: `Какую выгоду получил бизнес или команда от решения «${(actualBullets[2] || actualBullets[0] || '').slice(0, 50)}...» (сокращение числа инцидентов, экономия бюджета, ускорение релизов)?`,
-      placeholder: 'Например: ликвидировали сбои в пиковые часы (SLA 99.98%), ускорили релизный цикл с 2 недель до 2 дней...',
-      sampleAnswer: 'Ликвидировали дедлоки в пиковые дни, подняли SLA до 99.99% и сократили время выкатки релиза с 4 дней до 3 часов.'
+      context: 'Опыт и кейсы',
+      quote: '',
+      issue: 'В резюме не найдено описания конкретных задач или проектов.',
+      question: 'Расскажите об одном важном рабочем кейсе: какой была задача, что именно сделали лично вы и чем закончилась работа? Если есть измеренные результаты, добавьте их; если нет — достаточно описать подтверждаемый эффект.',
+      placeholder: 'Опишите реальный проект, свою роль и результат. Неподтверждённые цифры не нужны.',
+    });
+  }
+  actualBullets.slice(0, 6).forEach((bullet, index) => {
+    const hasAction = /разрабатыва|создава|созда[лн]|внедри|оптимизир|переписа|настрои|исправи|сократи|увеличи|запусти|спроектир|автоматизир|develop|implement|built|build|design|optimiz|improv|launch|reduc|increas|migrat|maintain|deliver|manage/i.test(bullet);
+    const hasOutcome = /результат|что позвол|что дало|сократ|увелич|ускор|сниз|повыс|улучш|запуст|выпуст|внедрен|вырос|уменьш|result|reduc|increas|improv|faster|saved|grew|launched|shipped|delivered|enabled/i.test(bullet);
+    if (bullet.length < 45 || !hasAction) {
+      specificQuestions.push({
+        id: specificQuestions.length + 1,
+        context: `Опыт ${index + 1}`,
+        quote: `«${bullet}»`,
+        issue: 'Неясно, какую часть работы выполнили лично вы.',
+        question: `В пункте «${bullet.slice(0, 140)}» что именно сделали лично вы: какие решения приняли, какие задачи выполнили и с кем работали?`,
+        placeholder: 'Уточните личную ответственность, не приписывая себе общий результат команды.',
+      });
+    } else if (!hasOutcome) {
+      specificQuestions.push({
+        id: specificQuestions.length + 1,
+        context: `Результат по опыту ${index + 1}`,
+        quote: `«${bullet}»`,
+        issue: 'Описаны обязанности или действия, но не итог для продукта, команды или бизнеса.',
+        question: `Что изменилось благодаря вашей работе из пункта «${bullet.slice(0, 140)}»? Укажите подтверждаемый результат; метрики до/после добавьте, только если они действительно измерялись.`,
+        placeholder: 'Фактический эффект для продукта, команды или бизнеса; цифры — только измеренные.',
+      });
     }
-  ];
+  });
+  if (actualBullets.length && detectedTech.length && !/опыт|experience|worked|работал|разрабатыва|создава/i.test(text)) {
+    specificQuestions.push({
+      id: specificQuestions.length + 1,
+      context: 'Применение навыков',
+      quote: `Навыки из резюме: ${detectedTech.join(', ')}`,
+      issue: 'Технологии перечислены, но не привязаны к проектам.',
+      question: `В каком из ваших проектов вы применяли ${detectedTech.join(', ')} и что именно сделали с помощью этих технологий?`,
+      placeholder: 'Назовите проект и свой вклад; достаточно только фактов.',
+    });
+  }
+  specificQuestions.splice(6);
 
   return {
     candidateName,
-    detectedRole,
+    detectedRole: detectedRole || 'Специализация не указана',
     detectedTech,
-    greeting: `Здравствуйте, ${candidateName}! Я детально изучил ваше резюме на позицию «${detectedRole}»${fileName ? ` (${fileName})` : ''}. В вашем опыте выделяется стек: ${detectedTech.slice(0, 5).join(', ')}. Чтобы резюме прошло ATS-фильтры и гарантировало оффер, мне нужны 3 точечных уточнения по конкретным пунктам вашего опыта:`,
+    contacts,
+    location,
+    links,
+    experience: actualBullets,
+    greeting: `Здравствуйте, ${candidateName}! Я проанализировал ${fileName ? `файл «${fileName}»` : 'текст резюме'}. ${specificQuestions.length
+      ? 'Ниже — только те уточнения, для которых в конкретных пунктах не хватает информации. Отвечайте фактами; неподтверждённые метрики не нужны.'
+      : 'Опыт и результаты описаны достаточно полно — обязательных уточнений нет, можно сразу оформить резюме.'}`,
     specificQuestions,
     questions: specificQuestions.map((q) => q.question)
   };
+}
+
+function escapeHtml(value: unknown): string {
+  return String(value ?? '').replace(/[&<>"']/g, (character) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  })[character]!);
+}
+
+function buildResumeHtml(resume: Record<string, any>): string {
+  const bullets = Array.isArray(resume.starBullets)
+    ? resume.starBullets.map((bullet: string) => `<li>${escapeHtml(bullet)}</li>`).join('')
+    : '';
+  const skills = Array.isArray(resume.techStack)
+    ? resume.techStack.map((skill: string) => `<li>${escapeHtml(skill)}</li>`).join('')
+    : '';
+  const links = Array.isArray(resume.links)
+    ? resume.links.map((link: { url: string; label: string }) => {
+      let url: URL;
+      try {
+        url = new URL(link.url);
+      } catch {
+        return '';
+      }
+      if (url.protocol !== 'http:' && url.protocol !== 'https:' && url.protocol !== 'mailto:' && url.protocol !== 'tel:') return '';
+      return `<a href="${escapeHtml(url.href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(link.label || url.hostname)}</a>`;
+    }).join(' ')
+    : '';
+  const photo = typeof resume.photo === 'string' && resume.photo.startsWith('data:image/')
+    ? `<img class="photo" src="${escapeHtml(resume.photo)}" alt="Фото кандидата">`
+    : '';
+  const contactLinks = [
+    resume.contacts?.email && `<a href="mailto:${escapeHtml(resume.contacts.email)}">${escapeHtml(resume.contacts.email)}</a>`,
+    resume.contacts?.phone && `<a href="tel:${escapeHtml(resume.contacts.phone.replace(/[^\d+]/g, ''))}">${escapeHtml(resume.contacts.phone)}</a>`,
+    resume.contacts?.telegram && `<a href="https://t.me/${escapeHtml(resume.contacts.telegram.replace(/^@/, ''))}">${escapeHtml(resume.contacts.telegram)}</a>`,
+    links,
+  ].filter(Boolean).join(' · ');
+
+  return `<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(resume.fullName || 'Резюме')}</title>
+<style>body{font:16px/1.6 Arial,sans-serif;color:#172033;background:#f4f7fb;margin:0;padding:32px}.resume{max-width:820px;margin:auto;background:#fff;padding:48px;border-radius:20px;box-shadow:0 12px 40px #17203312}header{display:flex;align-items:center;gap:24px;border-bottom:1px solid #e5eaf2;padding-bottom:24px}h1{margin:0;font-size:32px}h2{font-size:18px;color:#2459d3;margin:28px 0 8px}.role{color:#2459d3;font-weight:bold}.photo{width:112px;height:112px;object-fit:cover;border-radius:50%}a{color:#2459d3;margin-right:8px}li{margin:8px 0}@media(max-width:600px){body{padding:12px}.resume{padding:24px}}</style></head>
+<body><main class="resume"><header>${photo}<div><h1>${escapeHtml(resume.fullName)}</h1><div class="role">${escapeHtml(resume.title)}</div><div>${escapeHtml(resume.location)}</div><div>${contactLinks}</div></div></header>
+<h2>Профиль</h2><p>${escapeHtml(resume.summary)}</p>
+<h2>Опыт и результаты</h2><ul>${bullets}</ul>
+${skills ? `<h2>Навыки</h2><ul>${skills}</ul>` : ''}
+</main></body></html>`;
+}
+
+function mergeResumeFacts(experience: string[], answers: { answer: string }[]): string[] {
+  const bullets = experience.map((bullet, index) => (
+    answers[index]?.answer
+      ? `${bullet} Результат по словам кандидата: ${answers[index].answer}`
+      : bullet
+  ));
+  return [...bullets, ...answers.slice(experience.length).map((item) => item.answer)];
+}
+
+function isGroundedRewrite(rewrite: string, source: string): boolean {
+  const sourceTokens = new Set((source.toLocaleLowerCase().match(/[a-zа-яё0-9]+/g) || []).filter((token) => token.length > 3));
+  const rewriteTokens = (rewrite.toLocaleLowerCase().match(/[a-zа-яё0-9]+/g) || []).filter((token) => token.length > 3);
+  const numbers: string[] = rewrite.match(/\d+(?:[.,]\d+)?%?/g) || [];
+  const sourceNumbers = new Set<string>(source.match(/\d+(?:[.,]\d+)?%?/g) || []);
+  return rewriteTokens.length > 0
+    && rewriteTokens.filter((token) => sourceTokens.has(token)).length / rewriteTokens.length >= 0.35
+    && numbers.every((number) => sourceNumbers.has(number));
 }
 
 app.post('/api/simple/analyze-resume', async (req, res) => {
@@ -469,16 +575,36 @@ app.post('/api/simple/analyze-resume', async (req, res) => {
 
   // 1. If PDF uploaded, extract text from buffer
   let extractedText = '';
+  let extractedPhoto: string | undefined;
   if (pdfBase64) {
-    extractedText = await extractTextFromPdf(pdfBase64);
+    const pdfContent = await extractPdfContent(pdfBase64);
+    extractedText = pdfContent.text;
+    extractedPhoto = pdfContent.photo;
   }
   const fullText = (extractedText && extractedText.trim().length > 30)
     ? `${extractedText}\n${resumeText || ''}`
-    : (resumeText || extractedText || 'Резюме разработчика');
+    : (resumeText || extractedText || '');
+  if (!fullText.trim()) {
+    return res.status(422).json({ error: 'Не удалось прочитать текст PDF. Загрузите текстовый PDF или вставьте текст резюме.' });
+  }
+  const localAnalysis = semanticAnalyzeResume(fullText, fileName);
+  localAnalysis.photo = extractedPhoto;
 
   // 2. Strict prompt for Gemini: MUST cite candidate's actual projects, weak quotes and stack
-  const prompt = `Ты — элитный технический директор и карьерный стратег. Проанализируй РЕАЛЬНОЕ резюме кандидата.
-КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО давать шаблоны и общие фразы. Каждый вопрос ОБЯЗАН цитировать конкретные слова, технологии, компании или задачи из текста резюме кандидата!
+  const prompt = `Ты — опытный карьерный консультант и специалист по разбору резюме. Внимательно прочитай весь текст резюме и оцени его для целевой вакансии "${targetVacancy || 'не указана'}".
+
+Твоя цель — не задавать обязательные шаблонные вопросы. Если опыт уже ясно описан, личный вклад понятен, достижения и результаты убедительны, верни пустые массивы specificQuestions и questions: кандидат сразу перейдёт к визуальному оформлению.
+
+Задавай уточнение только если в конкретном месте действительно не хватает важного факта: неясно, что кандидат делал лично; не понятны продукт/задача/масштаб; перечислена обязанность без результата; или ключевой навык не подтверждён кейсом. Не требуй цифры ради цифр: спроси о метриках до/после только если они могли измеряться, и прямо разреши ответить качественно, если точных данных нет. Не подсказывай примерные достижения и не выдумывай факты.
+
+Правила для каждого вопроса:
+- quote — короткая дословная цитата из текста резюме; никогда не сочиняй цитату. Если привязать вопрос к цитате нельзя, не задавай его.
+- question — один конкретный вопрос только о недостающей информации этой цитаты, естественным языком.
+- issue — коротко объясняет, почему имеющейся формулировки недостаточно.
+- placeholder — какие факты вспомнить, без готового ответа и вымышленных чисел.
+- Не повторяй вопросы, на которые резюме уже отвечает. Не проси раскрыть конфиденциальные данные работодателя.
+
+Также точно извлеки имя, роль, навыки и контакты, если они прямо указаны.
 
 Текст резюме кандидата:
 """
@@ -498,8 +624,7 @@ ${fullText}
       "quote": "Точная цитата слабой или не оцифрованной фразы из резюме кандидата",
       "issue": "Почему эта конкретная фраза сейчас слабая для рекрутера",
       "question": "Точный вопрос кандидату, как оцифровать этот конкретный результат",
-      "placeholder": "Пример ответа с цифрами под этот проект",
-      "sampleAnswer": "Пример сильного ответа"
+      "placeholder": "Подсказка, какие факты уточнить — без выдуманных примеров ответа"
     }
   ],
   "questions": ["Строковый массив вопросов для совместимости"]
@@ -532,9 +657,25 @@ ${fullText}
 
       if (response.text) {
         const parsed = JSON.parse(response.text);
-        if (!parsed.questions && parsed.specificQuestions) {
-          parsed.questions = parsed.specificQuestions.map((q: any) => q.question);
-        }
+        const aiQuestions = Array.isArray(parsed.specificQuestions)
+          ? parsed.specificQuestions.filter((question: any) => {
+            if (!question || typeof question.question !== 'string' || typeof question.quote !== 'string') return false;
+            const quote = question.quote.trim().replace(/^[«"']|[»"']$/g, '').trim();
+            return quote.length >= 12 && fullText.toLocaleLowerCase().includes(quote.toLocaleLowerCase());
+          }).slice(0, 6)
+          : [];
+        parsed.candidateName = localAnalysis.candidateName;
+        parsed.detectedRole = localAnalysis.detectedRole;
+        parsed.greeting = typeof parsed.greeting === 'string' && parsed.greeting.trim()
+          ? parsed.greeting
+          : localAnalysis.greeting;
+        parsed.specificQuestions = aiQuestions;
+        parsed.questions = aiQuestions.map((question: { question: string }) => question.question);
+        parsed.contacts = localAnalysis.contacts;
+        parsed.links = localAnalysis.links;
+        parsed.experience = localAnalysis.experience;
+        parsed.detectedTech = localAnalysis.detectedTech;
+        parsed.photo = extractedPhoto;
         return res.json({ success: true, data: parsed, poweredBy: 'Gemini 3.8 Flash' });
       }
     } catch (e: any) {
@@ -543,7 +684,6 @@ ${fullText}
   }
 
   // 3. Fallback: Deep local semantic analyzer specifically quoting candidate's actual text
-  const localAnalysis = semanticAnalyzeResume(fullText, fileName);
   return res.json({
     success: true,
     data: localAnalysis,
@@ -553,38 +693,29 @@ ${fullText}
 
 app.post('/api/simple/generate-improved', async (req, res) => {
   const { resumeText, pdfBase64, questions, answers, targetVacancy } = req.body;
+  if (!resumeText && !pdfBase64) {
+    return res.status(400).json({ error: 'Either resumeText or pdfBase64 is required' });
+  }
 
-  const prompt = `Улучши резюме кандидата по методологии STAR на основе его ответов на вопросы.
-${resumeText ? `Оригинал резюме:\n${resumeText}\n` : 'Оригинал резюме был передан в PDF.'}
-Вопросы и Ответы кандидата:
-${JSON.stringify({ questions, answers }, null, 2)}
+  const pdfContent = pdfBase64 ? await extractPdfContent(pdfBase64) : { text: '' };
+  const fullText = [resumeText, pdfContent.text]
+    .filter((text) => typeof text === 'string' && text.trim())
+    .join('\n\n');
+  if (!fullText.trim()) {
+    return res.status(422).json({ error: 'Не удалось прочитать исходное резюме. Загрузите текстовый PDF или вставьте текст.' });
+  }
+  const analysis = semanticAnalyzeResume(fullText);
+  const answerPairs = Array.isArray(answers)
+    ? answers.map((answer: string, index: number) => ({ question: questions?.[index] || '', answer: answer?.trim() || '' })).filter((item: { answer: string }) => item.answer)
+    : [];
+  const prompt = `Перепиши резюме кандидата для вакансии "${targetVacancy || 'не указана'}", сохранив факты и личный вклад.
+Исходное резюме:
+${fullText}
 
-Сделай идеальное, чистое резюме с подтвержденными цифрами для вакансии "${targetVacancy || 'Senior Engineer'}".
-Ответь строго в JSON:
-{
-  "fullName": "Алексей Новиков",
-  "title": "Senior Full-Stack & Highload Architect",
-  "location": "Москва / Remote",
-  "contacts": {
-    "telegram": "@alex_novikov_tech",
-    "email": "alex.novikov.dev@gmail.com",
-    "github": "https://github.com"
-  },
-  "summary": "7+ лет проектирую распределенные сервисы с нагрузкой от 25k RPS. Сокращаю p99 задержки и устраняю системные сбои без даунтайма.",
-  "starBullets": [
-    "Спроектировал асинхронный конвейер обработки очередей на базе Kafka и Redis Streams, выдерживающий пиковую нагрузку 32 000 RPS без потерь данных.",
-    "Оптимизировал сложные запросы и партиционирование 12 Тб PostgreSQL, снизив p99 задержку транзакций на 88% (с 480мс до 55мс).",
-    "Ликвидировал узкие места в инфраструктуре кластера Kubernetes, сократив операционные расходы на облачные сервера на $94 000 в год."
-  ],
-  "metrics": [
-    {"label": "Пиковый RPS", "value": "32,000"},
-    {"label": "Снижение задержки", "value": "-88%"},
-    {"label": "Годовая экономия Cloud", "value": "$94,000"},
-    {"label": "Uptime SLA", "value": "99.99%"}
-  ],
-  "techStack": ["Go", "TypeScript", "PostgreSQL", "Kafka", "Redis", "Docker", "Kubernetes", "OpenTelemetry"],
-  "fullMarkdown": "Готовое резюме в Markdown..."
-}`;
+Ответы кандидата на уточнения:
+${JSON.stringify(answerPairs, null, 2)}
+
+СТРОГО: не придумывай имя, компании, должности, навыки, метрики, результаты, контакты, образование или даты. Числа и утверждения о достижениях разрешены только если буквально подтверждаются исходным резюме или ответом кандидата. Сохрани проекты и факты из оригинала. Если результат не измерялся, не добавляй число. Верни только JSON с полями fullName, title, location, summary, starBullets (массив), techStack (массив), metrics (массив объектов label/value). Для неизвестных строк верни пустую строку, для отсутствующих списков — пустой массив.`;
 
   if (ai) {
     try {
@@ -609,42 +740,58 @@ ${JSON.stringify({ questions, answers }, null, 2)}
         5000
       );
       if (response.text) {
-        return res.json({ success: true, data: JSON.parse(response.text), poweredBy: 'Gemini 3.8 Flash' });
+        const aiResume = JSON.parse(response.text);
+        const fallbackBullets = mergeResumeFacts(analysis.experience, answerPairs);
+        const sourceFacts = `${fullText}\n${answerPairs.map((item: { answer: string }) => item.answer).join('\n')}`;
+        const generatedBullets: string[] = Array.isArray(aiResume.starBullets)
+          ? aiResume.starBullets.filter((bullet: unknown): bullet is string => typeof bullet === 'string')
+          : [];
+        const useAiBullets = generatedBullets.length === fallbackBullets.length
+          && generatedBullets.every((bullet, index) => isGroundedRewrite(bullet, `${analysis.experience[index] || ''} ${answerPairs[index]?.answer || ''}`));
+        const summary = typeof aiResume.summary === 'string' && isGroundedRewrite(aiResume.summary, sourceFacts)
+          ? aiResume.summary
+          : [analysis.detectedRole !== 'Специализация не указана' ? analysis.detectedRole : '',
+            analysis.detectedTech.length ? `Навыки: ${analysis.detectedTech.join(', ')}.` : '']
+            .filter(Boolean).join('. ');
+        const improvedData: Record<string, any> = {
+          fullName: analysis.candidateName === 'Кандидат' ? '' : analysis.candidateName,
+          title: analysis.detectedRole === 'Специализация не указана' ? '' : analysis.detectedRole,
+          location: analysis.location,
+          summary,
+          contacts: analysis.contacts,
+          links: analysis.links,
+          photo: pdfContent.photo,
+          starBullets: useAiBullets ? generatedBullets : fallbackBullets,
+          techStack: analysis.detectedTech,
+          metrics: [],
+        };
+        improvedData.html = buildResumeHtml(improvedData);
+        return res.json({
+          success: true,
+          data: improvedData,
+          poweredBy: useAiBullets || summary === aiResume.summary ? 'Gemini 3.8 Flash (проверенные факты)' : 'CVision source-grounded renderer',
+        });
       }
     } catch (e: any) {
       console.warn('Gemini generate improved failed, using fallback:', e?.message);
     }
   }
 
-  // Local semantic synthesizer reflecting actual candidate name and answers
-  const analysis = semanticAnalyzeResume(fullText);
-  const ans0 = (answers && answers[0]) ? answers[0] : '15,000 активных пользователей и пиковые нагрузки';
-  const ans1 = (answers && answers[1]) ? answers[1] : 'сокращение задержки на 65% и ускорение загрузки';
-  const ans2 = (answers && answers[2]) ? answers[2] : 'повышение стабильности SLA до 99.98% и ускорение релизов';
-
-  const improvedData = {
-    fullName: analysis.candidateName !== 'Кандидат' ? analysis.candidateName : 'Илья Братанов',
-    title: analysis.detectedRole || 'Senior Engineer',
-    location: 'Москва / Remote Worldwide',
-    contacts: {
-      telegram: '@candidate_lead',
-      email: 'candidate.dev@gmail.com',
-      github: 'https://github.com'
-    },
-    summary: `Специалист уровня ${analysis.detectedRole} с подтвержденным стеком: ${analysis.detectedTech.slice(0, 5).join(', ')}. Успешно решил задачи оптимизации: ${ans1}. Обеспечил надежность системы под нагрузкой (${ans0}).`,
-    starBullets: [
-      `Спроектировал и внедрил архитектуру ключевого компонента: успешно масштабировал систему под нагрузку (${ans0}), исключив системные задержки.`,
-      `Провел глубокую оптимизацию производительности и рефакторинг: добился измеримого результата (${ans1}), улучшив клиентский опыт.`,
-      `Ликвидировал узкие горлышки и оптимизировал процессы поставки: обеспечил (${ans2}), защитив бизнес от простоев в пиковые часы.`
-    ],
-    metrics: [
-      { label: 'Масштаб нагрузки', value: ans0.match(/\d+[\s\d]*\w*/)?.[0] || '32,000 RPS' },
-      { label: 'Оптимизация задержки', value: ans1.match(/-?\d+%/)?.[0] || '-65% Latency' },
-      { label: 'Надежность сервиса', value: '99.99% SLA' },
-      { label: 'Ускорение релизов', value: '3x быстрее' }
-    ],
-    techStack: analysis.detectedTech
+  const starBullets = mergeResumeFacts(analysis.experience, answerPairs);
+  const improvedData: Record<string, any> = {
+    fullName: analysis.candidateName === 'Кандидат' ? '' : analysis.candidateName,
+    title: analysis.detectedRole === 'Специализация не указана' ? '' : analysis.detectedRole,
+    location: analysis.location,
+    contacts: analysis.contacts,
+    links: analysis.links,
+    photo: pdfContent.photo,
+    summary: [analysis.detectedRole, analysis.detectedTech.length ? `Навыки: ${analysis.detectedTech.join(', ')}.` : '']
+      .filter(Boolean).join('. '),
+    starBullets,
+    metrics: [],
+    techStack: analysis.detectedTech,
   };
+  improvedData.html = buildResumeHtml(improvedData);
 
   return res.json({
     success: true,
@@ -655,19 +802,25 @@ ${JSON.stringify({ questions, answers }, null, 2)}
 
 app.post('/api/simple/create-apply-link', (req, res) => {
   const { improvedResume, companyName, candidateName } = req.body;
-  const linkId = `r-${Math.random().toString(36).substring(2, 9)}`;
+  if (!improvedResume || typeof improvedResume !== 'object') {
+    return res.status(400).json({ error: 'improvedResume is required' });
+  }
+  const linkId = `r-${randomUUID().slice(0, 12)}`;
   const now = new Date();
   const dateStr = now.toLocaleDateString('ru-RU');
   const timeStr = now.toLocaleTimeString('ru-RU');
 
   simpleTrackingStore[linkId] = {
     linkId,
-    candidateName: candidateName || improvedResume?.fullName || 'Алексей Новиков',
+    candidateName: candidateName || improvedResume.fullName || 'Кандидат',
     companyName: companyName || 'Работодатель',
     createdAt: `${dateStr} в ${timeStr}`,
     improvedResume,
     opensCount: 0,
-    opens: []
+    opens: [],
+    sectionSeconds: {},
+    linkClicks: 0,
+    maxScrollDepth: 0,
   };
 
   res.json({
@@ -682,102 +835,77 @@ app.post('/api/simple/create-apply-link', (req, res) => {
 app.get('/api/simple/resume/:linkId', (req, res) => {
   const { linkId } = req.params;
   const found = simpleTrackingStore[linkId];
-  
+  if (!found) return res.status(404).json({ error: 'Resume link not found' });
+
   const now = new Date();
   const dateStr = now.toLocaleDateString('ru-RU');
   const timeStr = now.toLocaleTimeString('ru-RU');
+  found.opensCount = (found.opensCount || 0) + 1;
+  found.lastOpenedAt = `${dateStr} ? ${timeStr}`;
+  if (!found.firstOpenedAt) found.firstOpenedAt = found.lastOpenedAt;
+  found.opens.push({ openedAt: found.lastOpenedAt });
 
-  // If found, register opening event
-  if (found) {
-    found.opensCount = (found.opensCount || 0) + 1;
-    found.lastOpenedAt = `${dateStr} в ${timeStr}`;
-    if (!found.firstOpenedAt) {
-      found.firstOpenedAt = `${dateStr} в ${timeStr}`;
-    }
-    found.opens.push({
-      openedAt: `${dateStr} в ${timeStr}`,
-      device: req.headers['user-agent']?.includes('Mac') ? 'Desktop Chrome 124 (macOS)' : 'Desktop Chrome (Windows)',
-      dwellSeconds: 142,
-    });
-
-    return res.json({
-      success: true,
-      resume: found.improvedResume,
-      tracking: {
-        linkId,
-        opensCount: found.opensCount,
-        firstOpenedAt: found.firstOpenedAt,
-        lastOpenedAt: found.lastOpenedAt,
-      }
-    });
-  }
-
-  // Fallback demo resume if not yet created in memory
-  res.json({
+  return res.json({
     success: true,
-    resume: {
-      fullName: "Алексей Новиков",
-      title: "Senior Full-Stack & Highload Architect",
-      location: "Москва / Remote",
-      contacts: {
-        telegram: "@alex_novikov_tech",
-        email: "alex.novikov.dev@gmail.com",
-        github: "https://github.com"
-      },
-      summary: "7+ лет проектирую распределенные сервисы с нагрузкой от 25k RPS. Сокращаю p99 задержки и устраняю системные сбои без даунтайма.",
-      starBullets: [
-        "Спроектировал асинхронный конвейер обработки очередей на базе Kafka и Redis Streams, выдерживающий пиковую нагрузку 32 000 RPS без потерь данных.",
-        "Оптимизировал сложные запросы и партиционирование 12 Тб PostgreSQL, снизив p99 задержку транзакций на 88% (с 480мс до 55мс).",
-        "Ликвидировал узкие места в инфраструктуре кластера Kubernetes, сократив операционные расходы на облачные сервера на $94 000 в год."
-      ],
-      metrics: [
-        { label: "Пиковый RPS", value: "32,000" },
-        { label: "Снижение p99 latency", value: "-88%" },
-        { label: "Годовая экономия Cloud", value: "$94,000" },
-        { label: "Uptime SLA", value: "99.99%" }
-      ],
-      techStack: ["Go", "TypeScript", "PostgreSQL", "Kafka", "Redis", "Docker", "Kubernetes"]
-    },
+    resume: found.improvedResume,
     tracking: {
       linkId,
-      opensCount: 1,
-      firstOpenedAt: `${dateStr} в ${timeStr}`,
-      lastOpenedAt: `${dateStr} в ${timeStr}`
-    }
+      opensCount: found.opensCount,
+      firstOpenedAt: found.firstOpenedAt,
+      lastOpenedAt: found.lastOpenedAt,
+    },
   });
 });
 
-app.post('/api/simple/record-open/:linkId', (req, res) => {
-  const { linkId } = req.params;
-  const now = new Date();
-  const dateStr = now.toLocaleDateString('ru-RU');
-  const timeStr = now.toLocaleTimeString('ru-RU');
+app.post('/api/simple/analytics/:linkId', (req, res) => {
+  const found = simpleTrackingStore[req.params.linkId];
+  if (!found) return res.status(404).json({ error: 'Resume link not found' });
+  const { sectionSeconds, scrollDepth, linkClick } = req.body;
 
-  if (!simpleTrackingStore[linkId]) {
-    simpleTrackingStore[linkId] = {
-      linkId,
-      companyName: 'IT Работодатель',
-      createdAt: `${dateStr} в ${timeStr}`,
-      opensCount: 0,
-      opens: []
-    };
+  if (sectionSeconds && typeof sectionSeconds === 'object') {
+    const trackedSections = new Set(['Контакты', 'Профиль', 'Показатели', 'Опыт и кейсы', 'Навыки']);
+    for (const [section, seconds] of Object.entries(sectionSeconds)) {
+      if (trackedSections.has(section) && typeof seconds === 'number' && Number.isFinite(seconds) && seconds > 0) {
+        found.sectionSeconds[section] = (found.sectionSeconds[section] || 0) + Math.min(seconds, 60);
+      }
+    }
   }
-
-  const item = simpleTrackingStore[linkId];
-  item.opensCount = (item.opensCount || 0) + 1;
-  item.lastOpenedAt = `${dateStr} в ${timeStr}`;
-  if (!item.firstOpenedAt) item.firstOpenedAt = `${dateStr} в ${timeStr}`;
-
-  res.json({ success: true, openedAt: item.lastOpenedAt, opensCount: item.opensCount });
+  if (typeof scrollDepth === 'number' && Number.isFinite(scrollDepth)) {
+    found.maxScrollDepth = Math.max(found.maxScrollDepth || 0, Math.min(100, Math.max(0, scrollDepth)));
+  }
+  if (linkClick === true) found.linkClicks += 1;
+  return res.json({ success: true });
 });
 
 app.get('/api/simple/tracking/:linkId', (req, res) => {
   const { linkId } = req.params;
   const found = simpleTrackingStore[linkId];
+  if (!found) return res.status(404).json({ error: 'Resume link not found' });
 
-  const openedAt = found?.lastOpenedAt || found?.firstOpenedAt || null;
-  const opensCount = found?.opensCount || 0;
-
+  const openedAt = found.lastOpenedAt || found.firstOpenedAt || null;
+  const opensCount = found.opensCount || 0;
+  const sectionSeconds: Record<string, number> = found.sectionSeconds || {};
+  const totalSeconds = Object.values(sectionSeconds).reduce((sum, seconds) => sum + seconds, 0);
+  const heatmap = Object.entries(sectionSeconds).map(([section, seconds]) => ({
+    section,
+    seconds: Math.round(seconds),
+    percentage: totalSeconds ? Math.round((seconds / totalSeconds) * 100) : 0,
+    intensity: totalSeconds && seconds / totalSeconds > 0.4 ? 'hot' : totalSeconds && seconds / totalSeconds > 0.2 ? 'warm' : 'cold',
+  }));
+  const recommendations: { id: string; title: string; reason: string; prompt: string; accepted: boolean }[] = [];
+  const resumeBullets: string[] = found.improvedResume?.starBullets || [];
+  if (opensCount > 0 && resumeBullets.length && !resumeBullets.some((bullet) => /\d/.test(bullet))
+    && !found.acceptedRecommendations?.includes('add-result-0')) {
+    recommendations.push({
+      id: 'add-result-0',
+      title: 'Добавить результат к первому кейсу',
+      reason: totalSeconds
+        ? `За просмотр резюме зафиксировано ${Math.round(totalSeconds)} сек. внимания. В первом кейсе нет измеримого результата.`
+        : 'В первом кейсе пока нет измеримого результата.',
+      prompt: `Какой реальный результат был у кейса «${resumeBullets[0].slice(0, 180)}»? Можно ответить без цифр, если их не измеряли.`,
+      accepted: false,
+    });
+  }
   res.json({
     success: true,
     tracking: {
@@ -785,16 +913,33 @@ app.get('/api/simple/tracking/:linkId', (req, res) => {
       status: opensCount > 0 ? 'opened' : 'pending',
       firstOpenedAt: openedAt,
       opensCount: opensCount,
-      device: opensCount > 0 ? (found?.opens?.[0]?.device || 'Desktop Chrome 124 (macOS)') : 'Ожидается переход...',
-      dwellSeconds: opensCount > 0 ? 142 : 0,
-      heatmap: [
-        { section: 'Ключевые достижения (STAR) и метрики', seconds: opensCount > 0 ? 72 : 0, intensity: 'hot', percentage: 52 },
-        { section: 'Технологический стек и архитектура', seconds: opensCount > 0 ? 38 : 0, intensity: 'warm', percentage: 27 },
-        { section: 'Контакты и позиционирование', seconds: opensCount > 0 ? 24 : 0, intensity: 'warm', percentage: 17 },
-        { section: 'Образование и курсы', seconds: opensCount > 0 ? 4 : 0, intensity: 'cold', percentage: 4 }
-      ]
+      dwellSeconds: Math.round(totalSeconds),
+      maxScrollDepth: Math.round(found.maxScrollDepth || 0),
+      linkClicks: found.linkClicks || 0,
+      heatmap,
+      recommendations,
     }
   });
+});
+
+app.post('/api/simple/recommendations/:linkId/accept', (req, res) => {
+  const found = simpleTrackingStore[req.params.linkId];
+  if (!found) return res.status(404).json({ error: 'Resume link not found' });
+  const { recommendationId, text } = req.body;
+  if (recommendationId === 'add-result-0') {
+    if (typeof text !== 'string' || !text.trim()) {
+      return res.status(400).json({ error: 'Добавьте подтверждённый результат перед сохранением.' });
+    }
+    const bullets: string[] = found.improvedResume.starBullets || [];
+    if (!bullets.length) return res.status(400).json({ error: 'В резюме нет кейса для дополнения.' });
+    bullets[0] = `${bullets[0]} Результат по словам кандидата: ${text.trim()}`;
+    found.improvedResume.starBullets = bullets;
+  } else {
+    return res.status(400).json({ error: 'Неизвестная рекомендация.' });
+  }
+  found.acceptedRecommendations = [...(found.acceptedRecommendations || []), recommendationId];
+  found.improvedResume.html = buildResumeHtml(found.improvedResume);
+  return res.json({ success: true, resume: found.improvedResume });
 });
 
 // Start server with Vite middleware in dev or static files in production
