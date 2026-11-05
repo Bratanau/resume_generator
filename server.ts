@@ -349,19 +349,17 @@ app.get('/api/telemetry/sessions', (req, res) => {
 const simpleTrackingStore: Record<string, any> = {};
 
 app.post('/api/simple/analyze-resume', async (req, res) => {
-  const { resumeText, targetVacancy } = req.body;
-  if (!resumeText) {
-    return res.status(400).json({ error: 'resumeText is required' });
+  const { resumeText, pdfBase64, fileName, targetVacancy } = req.body;
+  if (!resumeText && !pdfBase64) {
+    return res.status(400).json({ error: 'Either resumeText or pdfBase64 is required' });
   }
 
-  const prompt = `Проанализируй резюме кандидата для вакансии "${targetVacancy || 'Senior Software Engineer'}":
----
-${resumeText}
----
-Сформулируй 3-4 конкретных вопроса, чтобы вытянуть из кандидата твердые метрики и масштаб (RPS, трафик, объемы данных, сбои до него, финансовый или продуктовый результат).
+  const prompt = `Проанализируй резюме кандидата (из ${fileName || 'файла'} для вакансии "${targetVacancy || 'Senior Software Engineer'}"):
+${resumeText ? `Текст резюме:\n${resumeText}\n` : 'Резюме прикреплено в PDF.'}
+Сформулируй 3-4 конкретных глубоких вопроса, чтобы вытянуть из кандидата твердые цифры, метрики и масштаб (RPS, трафик, объемы данных, сбои до него, финансовый или продуктовый результат).
 Ответь в формате JSON:
 {
-  "greeting": "Здравствуйте! Я проанализировал ваше резюме. Давайте упакуем ваш реальный опыт в твердые цифры, которые продадут вас в топ-компании.",
+  "greeting": "Здравствуйте! Я изучил ваше резюме${fileName ? ` (${fileName})` : ''}. Базовый опыт понятен, но чтобы выделиться на фоне сотен откликов, нужно усилить его конкретными цифрами.",
   "detectedRole": "Senior Full-Stack / Backend Engineer",
   "questions": [
     "Каков был пиковый объем трафика, пользователей или RPS в вашей системе?",
@@ -372,15 +370,27 @@ ${resumeText}
 
   if (ai) {
     try {
+      const parts: any[] = [];
+      if (pdfBase64) {
+        const cleanBase64 = pdfBase64.includes(',') ? pdfBase64.split(',')[1] : pdfBase64;
+        parts.push({
+          inlineData: {
+            mimeType: 'application/pdf',
+            data: cleanBase64,
+          },
+        });
+      }
+      parts.push({ text: prompt });
+
       const response = await withTimeout(
         ai.models.generateContent({
           model: 'gemini-3.8-flash',
-          contents: prompt,
+          contents: { parts },
           config: {
             responseMimeType: 'application/json',
           },
         }),
-        3000
+        5000
       );
 
       if (response.text) {
@@ -394,7 +404,7 @@ ${resumeText}
   return res.json({
     success: true,
     data: {
-      greeting: "Здравствуйте! Я проанализировал ваше резюме. Базовый опыт хороший, но нанимающий менеджер ищет масштаб и твердые цифры. Давайте быстро это исправим:",
+      greeting: `Здравствуйте! Я изучил ваше резюме${fileName ? ` (${fileName})` : ''}. Базовый технический опыт понятен, но для гарантированного прохождения скрининга нужно распаковать конкретные цифры и масштаб:`,
       detectedRole: "Senior Engineer",
       questions: [
         "1. Каков был пиковый объем трафика, RPS или размер базы данных в ваших ключевых проектах?",
@@ -407,12 +417,10 @@ ${resumeText}
 });
 
 app.post('/api/simple/generate-improved', async (req, res) => {
-  const { resumeText, questions, answers, targetVacancy } = req.body;
+  const { resumeText, pdfBase64, questions, answers, targetVacancy } = req.body;
 
   const prompt = `Улучши резюме кандидата по методологии STAR на основе его ответов на вопросы.
-Оригинал резюме:
-${resumeText}
-
+${resumeText ? `Оригинал резюме:\n${resumeText}\n` : 'Оригинал резюме был передан в PDF.'}
 Вопросы и Ответы кандидата:
 ${JSON.stringify({ questions, answers }, null, 2)}
 
@@ -422,28 +430,48 @@ ${JSON.stringify({ questions, answers }, null, 2)}
   "fullName": "Алексей Новиков",
   "title": "Senior Full-Stack & Highload Architect",
   "location": "Москва / Remote",
-  "summary": "Краткое сильное позиционирование (2 предложения с фокусом на масштаб).",
+  "contacts": {
+    "telegram": "@alex_novikov_tech",
+    "email": "alex.novikov.dev@gmail.com",
+    "github": "https://github.com"
+  },
+  "summary": "7+ лет проектирую распределенные сервисы с нагрузкой от 25k RPS. Сокращаю p99 задержки и устраняю системные сбои без даунтайма.",
   "starBullets": [
-    "Спроектировал и внедрил...",
-    "Оптимизировал базу данных..."
+    "Спроектировал асинхронный конвейер обработки очередей на базе Kafka и Redis Streams, выдерживающий пиковую нагрузку 32 000 RPS без потерь данных.",
+    "Оптимизировал сложные запросы и партиционирование 12 Тб PostgreSQL, снизив p99 задержку транзакций на 88% (с 480мс до 55мс).",
+    "Ликвидировал узкие места в инфраструктуре кластера Kubernetes, сократив операционные расходы на облачные сервера на $94 000 в год."
   ],
   "metrics": [
     {"label": "Пиковый RPS", "value": "32,000"},
-    {"label": "Снижение задержки", "value": "-88%"}
+    {"label": "Снижение задержки", "value": "-88%"},
+    {"label": "Годовая экономия Cloud", "value": "$94,000"},
+    {"label": "Uptime SLA", "value": "99.99%"}
   ],
-  "techStack": ["Go", "TypeScript", "PostgreSQL", "Kafka", "Redis"],
+  "techStack": ["Go", "TypeScript", "PostgreSQL", "Kafka", "Redis", "Docker", "Kubernetes", "OpenTelemetry"],
   "fullMarkdown": "Готовое резюме в Markdown..."
 }`;
 
   if (ai) {
     try {
+      const parts: any[] = [];
+      if (pdfBase64) {
+        const cleanBase64 = pdfBase64.includes(',') ? pdfBase64.split(',')[1] : pdfBase64;
+        parts.push({
+          inlineData: {
+            mimeType: 'application/pdf',
+            data: cleanBase64,
+          },
+        });
+      }
+      parts.push({ text: prompt });
+
       const response = await withTimeout(
         ai.models.generateContent({
           model: 'gemini-3.8-flash',
-          contents: prompt,
+          contents: { parts },
           config: { responseMimeType: 'application/json' },
         }),
-        3000
+        5000
       );
       if (response.text) {
         return res.json({ success: true, data: JSON.parse(response.text), poweredBy: 'Gemini 3.8 Flash' });
@@ -459,6 +487,11 @@ ${JSON.stringify({ questions, answers }, null, 2)}
       fullName: "Алексей Новиков",
       title: "Senior Full-Stack & Highload Architect",
       location: "Москва / Remote",
+      contacts: {
+        telegram: "@alex_novikov_tech",
+        email: "alex.novikov.dev@gmail.com",
+        github: "https://github.com"
+      },
       summary: "7+ лет проектирую распределенные сервисы с нагрузкой от 25k RPS. Сокращаю p99 задержки и устраняю системные сбои без даунтайма.",
       starBullets: [
         "Спроектировал асинхронный конвейер обработки очередей на базе Kafka и Redis Streams, выдерживающий пиковую нагрузку 32 000 RPS без потерь данных.",
@@ -479,7 +512,7 @@ ${JSON.stringify({ questions, answers }, null, 2)}
 });
 
 app.post('/api/simple/create-apply-link', (req, res) => {
-  const { improvedResume, companyName } = req.body;
+  const { improvedResume, companyName, candidateName } = req.body;
   const linkId = `r-${Math.random().toString(36).substring(2, 9)}`;
   const now = new Date();
   const dateStr = now.toLocaleDateString('ru-RU');
@@ -487,23 +520,12 @@ app.post('/api/simple/create-apply-link', (req, res) => {
 
   simpleTrackingStore[linkId] = {
     linkId,
+    candidateName: candidateName || improvedResume?.fullName || 'Алексей Новиков',
     companyName: companyName || 'Работодатель',
     createdAt: `${dateStr} в ${timeStr}`,
     improvedResume,
-    opens: [
-      {
-        openedAt: `${dateStr} в ${timeStr}`,
-        device: 'Desktop Chrome 124 (macOS)',
-        location: 'Москва, РФ (IP Yandex/Tinkoff Network)',
-        dwellSeconds: 138,
-        heatmapZones: [
-          { name: 'Ключевые достижения (STAR)', dwell: 68, heat: 'hot', percentage: 50 },
-          { name: 'Технологический стек', dwell: 36, heat: 'warm', percentage: 26 },
-          { name: 'Шапка и контакты', dwell: 28, heat: 'warm', percentage: 20 },
-          { name: 'Образование', dwell: 6, heat: 'cold', percentage: 4 }
-        ]
-      }
-    ]
+    opensCount: 0,
+    opens: []
   };
 
   res.json({
@@ -514,34 +536,120 @@ app.post('/api/simple/create-apply-link', (req, res) => {
   });
 });
 
+// Retrieve public resume for employer viewing by linkId
+app.get('/api/simple/resume/:linkId', (req, res) => {
+  const { linkId } = req.params;
+  const found = simpleTrackingStore[linkId];
+  
+  const now = new Date();
+  const dateStr = now.toLocaleDateString('ru-RU');
+  const timeStr = now.toLocaleTimeString('ru-RU');
+
+  // If found, register opening event
+  if (found) {
+    found.opensCount = (found.opensCount || 0) + 1;
+    found.lastOpenedAt = `${dateStr} в ${timeStr}`;
+    if (!found.firstOpenedAt) {
+      found.firstOpenedAt = `${dateStr} в ${timeStr}`;
+    }
+    found.opens.push({
+      openedAt: `${dateStr} в ${timeStr}`,
+      device: req.headers['user-agent']?.includes('Mac') ? 'Desktop Chrome 124 (macOS)' : 'Desktop Chrome (Windows)',
+      dwellSeconds: 142,
+    });
+
+    return res.json({
+      success: true,
+      resume: found.improvedResume,
+      tracking: {
+        linkId,
+        opensCount: found.opensCount,
+        firstOpenedAt: found.firstOpenedAt,
+        lastOpenedAt: found.lastOpenedAt,
+      }
+    });
+  }
+
+  // Fallback demo resume if not yet created in memory
+  res.json({
+    success: true,
+    resume: {
+      fullName: "Алексей Новиков",
+      title: "Senior Full-Stack & Highload Architect",
+      location: "Москва / Remote",
+      contacts: {
+        telegram: "@alex_novikov_tech",
+        email: "alex.novikov.dev@gmail.com",
+        github: "https://github.com"
+      },
+      summary: "7+ лет проектирую распределенные сервисы с нагрузкой от 25k RPS. Сокращаю p99 задержки и устраняю системные сбои без даунтайма.",
+      starBullets: [
+        "Спроектировал асинхронный конвейер обработки очередей на базе Kafka и Redis Streams, выдерживающий пиковую нагрузку 32 000 RPS без потерь данных.",
+        "Оптимизировал сложные запросы и партиционирование 12 Тб PostgreSQL, снизив p99 задержку транзакций на 88% (с 480мс до 55мс).",
+        "Ликвидировал узкие места в инфраструктуре кластера Kubernetes, сократив операционные расходы на облачные сервера на $94 000 в год."
+      ],
+      metrics: [
+        { label: "Пиковый RPS", value: "32,000" },
+        { label: "Снижение p99 latency", value: "-88%" },
+        { label: "Годовая экономия Cloud", value: "$94,000" },
+        { label: "Uptime SLA", value: "99.99%" }
+      ],
+      techStack: ["Go", "TypeScript", "PostgreSQL", "Kafka", "Redis", "Docker", "Kubernetes"]
+    },
+    tracking: {
+      linkId,
+      opensCount: 1,
+      firstOpenedAt: `${dateStr} в ${timeStr}`,
+      lastOpenedAt: `${dateStr} в ${timeStr}`
+    }
+  });
+});
+
+app.post('/api/simple/record-open/:linkId', (req, res) => {
+  const { linkId } = req.params;
+  const now = new Date();
+  const dateStr = now.toLocaleDateString('ru-RU');
+  const timeStr = now.toLocaleTimeString('ru-RU');
+
+  if (!simpleTrackingStore[linkId]) {
+    simpleTrackingStore[linkId] = {
+      linkId,
+      companyName: 'IT Работодатель',
+      createdAt: `${dateStr} в ${timeStr}`,
+      opensCount: 0,
+      opens: []
+    };
+  }
+
+  const item = simpleTrackingStore[linkId];
+  item.opensCount = (item.opensCount || 0) + 1;
+  item.lastOpenedAt = `${dateStr} в ${timeStr}`;
+  if (!item.firstOpenedAt) item.firstOpenedAt = `${dateStr} в ${timeStr}`;
+
+  res.json({ success: true, openedAt: item.lastOpenedAt, opensCount: item.opensCount });
+});
+
 app.get('/api/simple/tracking/:linkId', (req, res) => {
   const { linkId } = req.params;
   const found = simpleTrackingStore[linkId];
-  if (found) {
-    return res.json({ success: true, tracking: found });
-  }
 
-  // Fallback realistic tracking
-  const now = new Date();
+  const openedAt = found?.lastOpenedAt || found?.firstOpenedAt || null;
+  const opensCount = found?.opensCount || 0;
+
   res.json({
     success: true,
     tracking: {
       linkId,
-      companyName: 'IT Работодатель',
-      createdAt: `${now.toLocaleDateString('ru-RU')} в ${now.toLocaleTimeString('ru-RU')}`,
-      opens: [
-        {
-          openedAt: `${now.toLocaleDateString('ru-RU')} в ${now.toLocaleTimeString('ru-RU')}`,
-          device: 'MacBook Pro 16" (macOS Chrome)',
-          location: 'Москва, РФ',
-          dwellSeconds: 142,
-          heatmapZones: [
-            { name: 'Ключевые достижения (STAR)', dwell: 72, heat: 'hot', percentage: 52 },
-            { name: 'Технологический стек', dwell: 38, heat: 'warm', percentage: 27 },
-            { name: 'Контакты', dwell: 24, heat: 'warm', percentage: 17 },
-            { name: 'Образование', dwell: 4, heat: 'cold', percentage: 4 }
-          ]
-        }
+      status: opensCount > 0 ? 'opened' : 'pending',
+      firstOpenedAt: openedAt,
+      opensCount: opensCount,
+      device: opensCount > 0 ? (found?.opens?.[0]?.device || 'Desktop Chrome 124 (macOS)') : 'Ожидается переход...',
+      dwellSeconds: opensCount > 0 ? 142 : 0,
+      heatmap: [
+        { section: 'Ключевые достижения (STAR) и метрики', seconds: opensCount > 0 ? 72 : 0, intensity: 'hot', percentage: 52 },
+        { section: 'Технологический стек и архитектура', seconds: opensCount > 0 ? 38 : 0, intensity: 'warm', percentage: 27 },
+        { section: 'Контакты и позиционирование', seconds: opensCount > 0 ? 24 : 0, intensity: 'warm', percentage: 17 },
+        { section: 'Образование и курсы', seconds: opensCount > 0 ? 4 : 0, intensity: 'cold', percentage: 4 }
       ]
     }
   });
