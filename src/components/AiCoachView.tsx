@@ -160,7 +160,7 @@ export const AiCoachView: React.FC<AiCoachViewProps> = ({
         </div>
 
         <div className="text-xs text-slate-400 hidden sm:block pr-3">
-          Powered by <strong>Gemini 3.8 Flash</strong>
+          Powered by <strong>YandexGPT</strong>
         </div>
       </div>
 

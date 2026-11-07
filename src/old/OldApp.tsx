@@ -186,7 +186,7 @@ export default function OldApp({ onSwitchToSimple }: { onSwitchToSimple?: () => 
             onClick={onSwitchToSimple}
             className="px-3 py-1 rounded-lg bg-white text-indigo-950 font-bold hover:bg-slate-100 transition shadow"
           >
-            ← Переключить на Упрощенную версию (Gemini Chat, белый фон)
+            ← Переключить на упрощённую версию (AI-диалог, белый фон)
           </button>
         </div>
       )}

@@ -1,8 +1,8 @@
 {
-  "name": "CVision: Smart B2B Resume & Candidate CRM",
-  "description": "B2B SaaS HR-Tech platform turning job search into sales: AI STAR unpacker, recruiter spy webvisor & heatmaps, voice reviews, and Bragsheet career tracker.",
+  "name": "CVision: AI Candidate Screening",
+  "description": "AI-assisted candidate screening: recruiters publish a vacancy and review applications, while candidates upload a resume, answer tailored questions, and receive a transparent decision.",
   "requestFramePermissions": [],
   "majorCapabilities": [
-    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+    "MAJOR_CAPABILITY_SERVER_SIDE_YANDEXGPT_API"
   ]
 }

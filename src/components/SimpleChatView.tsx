@@ -45,6 +45,8 @@ interface ChatMessage {
   questionsData?: string[];
   specificQuestions?: SpecificQuestion[];
   detectedTech?: string[];
+  reviewSummary?: string;
+  strengths?: string[];
   candidateName?: string;
   detectedRole?: string;
   resumeData?: any;
@@ -96,7 +98,7 @@ export const SimpleChatView: React.FC<SimpleChatViewProps> = ({ onSwitchToOldVer
       id: 'msg-1',
       sender: 'ai',
       type: 'intro',
-      text: 'Здравствуйте! Я ваш карьерный AI-ассистент на базе Gemini. Загрузите ваше резюме в формате PDF — я детально изучу ваш опыт, найду слабые формулировки и задам точечные вопросы именно по вашим проектам, чтобы усилить резюме реальными цифрами и масштабом.',
+      text: 'Здравствуйте! Я ваш карьерный AI-ассистент. Загрузите ваше резюме в формате PDF — я детально изучу ваш опыт, найду слабые формулировки и задам точечные вопросы именно по вашим проектам, чтобы усилить резюме реальными цифрами и масштабом.',
     },
   ]);
 
@@ -244,10 +246,12 @@ export const SimpleChatView: React.FC<SimpleChatViewProps> = ({ onSwitchToOldVer
         id: `ai-${Date.now()}`,
         sender: 'ai',
         type: 'questions',
-        text: aiData.greeting || `Я изучил резюме. Ответьте на вопросы по указанным кейсам и навыкам; не добавляйте неподтверждённые цифры.`,
+        text: `${aiData.greeting || 'Я изучил резюме.'}${String(resData.poweredBy || '').includes('Local') ? '\n\nСейчас ИИ-модель недоступна, поэтому это предварительные локальные уточнения. Проверьте их перед ответом.' : ''}`,
         questionsData: questionsList,
         specificQuestions: specQuestions,
         detectedTech: techList,
+        reviewSummary: typeof aiData.reviewSummary === 'string' ? aiData.reviewSummary : '',
+        strengths: Array.isArray(aiData.strengths) ? aiData.strengths : [],
         candidateName: detectedName,
         detectedRole: role
       };
@@ -302,7 +306,7 @@ export const SimpleChatView: React.FC<SimpleChatViewProps> = ({ onSwitchToOldVer
         id: `ai-gen-${Date.now()}`,
         sender: 'ai',
         type: 'improved_resume',
-        text: `Готово, ${detectedCandidateName || 'коллега'}! Я подготовил структурированную версию на основе исходного резюме и ваших ответов. Проверьте каждый факт перед отправкой; неизвестные метрики не подставлялись.`,
+        text: `Готово, ${detectedCandidateName || 'коллега'}! Я подготовил полный HTML-макет резюме, сохранил подробности исходного текста и учёл ваши ответы. Проверьте каждый факт перед отправкой; неизвестные метрики не подставлялись.`,
         resumeData: generated,
       };
 
@@ -529,6 +533,17 @@ export const SimpleChatView: React.FC<SimpleChatViewProps> = ({ onSwitchToOldVer
                     )}
                   </div>
 
+                  {(msg.reviewSummary || msg.strengths?.length) && (
+                    <div className="space-y-2 rounded-xl border border-blue-100 bg-blue-50/60 p-3">
+                      {msg.reviewSummary && <p className="text-xs leading-relaxed text-slate-700">{msg.reviewSummary}</p>}
+                      {msg.strengths?.length ? (
+                        <ul className="space-y-1 text-xs text-slate-700">
+                          {msg.strengths.map((strength, index) => <li key={index}>✓ {strength}</li>)}
+                        </ul>
+                      ) : null}
+                    </div>
+                  )}
+
                   <span className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5 pt-1">
                     <HelpCircle className="w-3.5 h-3.5 text-blue-600" />
                     <span>{pendingQuestions.length ? 'Уточнения по пунктам, которым не хватает деталей:' : 'В резюме не нашлось пробелов, требующих уточнений.'}</span>
@@ -622,7 +637,7 @@ export const SimpleChatView: React.FC<SimpleChatViewProps> = ({ onSwitchToOldVer
               {msg.type === 'improved_resume' && msg.resumeData && (
                 <div className="mt-4 pt-4 border-t border-slate-200 space-y-4">
                   <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-xs space-y-4">
-                    <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 border-b border-slate-100 pb-3">
+                    {!msg.resumeData.html && <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 border-b border-slate-100 pb-3">
                       <div>
                         {msg.resumeData.photo && (
                           <img src={msg.resumeData.photo} alt="Фото из исходного резюме" className="mb-3 h-16 w-16 rounded-xl object-cover border border-slate-200" />
@@ -663,17 +678,48 @@ export const SimpleChatView: React.FC<SimpleChatViewProps> = ({ onSwitchToOldVer
                           </a>
                         ))}
                       </div>
-                    </div>
+                    </div>}
 
-                    <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 text-xs text-slate-700 leading-relaxed">
+                    {!msg.resumeData.html && <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 text-xs text-slate-700 leading-relaxed">
                       <span className="font-bold text-slate-900 block mb-0.5">
                         🎯 Позиционирование:
                       </span>
                       {msg.resumeData.summary}
-                    </div>
+                    </div>}
+
+                    {msg.resumeData.html ? (
+                      <section className="space-y-2 border-t border-slate-200 pt-4">
+                        <div>
+                          <h4 className="text-sm font-extrabold text-slate-900">Полное HTML-резюме</h4>
+                          <p className="text-[11px] text-slate-500">
+                            Это готовый макет целого резюме. Проверьте содержание и оформление перед отправкой.
+                          </p>
+                        </div>
+                        <iframe
+                          title="Предпросмотр полного HTML-резюме"
+                          srcDoc={msg.resumeData.html}
+                          sandbox="allow-popups allow-popups-to-escape-sandbox"
+                          referrerPolicy="no-referrer"
+                          className="w-full rounded-xl border border-slate-200 bg-slate-100"
+                          style={{ height: `${Math.min(18000, Math.max(1400, Math.ceil((msg.resumeData.fullResumeText?.length || 0) / 42) * 32 + 800))}px` }}
+                        />
+                      </section>
+                    ) : msg.resumeData.fullResumeText && (
+                      <section className="space-y-2 border-t border-slate-200 pt-4">
+                        <div>
+                          <h4 className="text-sm font-extrabold text-slate-900">Полная версия резюме</h4>
+                          <p className="text-[11px] text-slate-500">
+                            Исходные разделы и детали сохранены; ответы добавлены к полной версии.
+                          </p>
+                        </div>
+                        <div className="max-h-[36rem] overflow-y-auto rounded-xl border border-slate-200 bg-white p-4 text-xs leading-6 text-slate-800 whitespace-pre-wrap break-words">
+                          {msg.resumeData.fullResumeText}
+                        </div>
+                      </section>
+                    )}
 
                     {/* Metric Badges */}
-                    {msg.resumeData.metrics && (
+                    {!msg.resumeData.html && msg.resumeData.metrics && (
                       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                         {msg.resumeData.metrics.map((m: any, idx: number) => (
                           <div key={idx} className="bg-blue-50/50 p-2.5 rounded-xl border border-blue-100 text-center">
@@ -689,7 +735,7 @@ export const SimpleChatView: React.FC<SimpleChatViewProps> = ({ onSwitchToOldVer
                     )}
 
                     {/* Star Bullets */}
-                    <div className="space-y-2 text-xs text-slate-800">
+                    {!msg.resumeData.fullResumeText && <div className="space-y-2 text-xs text-slate-800">
                       <span className="font-bold text-slate-900 block text-xs">
                         🏆 Ключевые достижения (STAR):
                       </span>
@@ -699,10 +745,10 @@ export const SimpleChatView: React.FC<SimpleChatViewProps> = ({ onSwitchToOldVer
                           <span className="leading-relaxed">{b}</span>
                         </div>
                       ))}
-                    </div>
+                    </div>}
 
                     {/* Tech stack */}
-                    <div className="pt-2 border-t border-slate-100">
+                    {!msg.resumeData.fullResumeText && <div className="pt-2 border-t border-slate-100">
                       <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5">
                         Технологический стек:
                       </span>
@@ -713,7 +759,7 @@ export const SimpleChatView: React.FC<SimpleChatViewProps> = ({ onSwitchToOldVer
                           </span>
                         ))}
                       </div>
-                    </div>
+                    </div>}
                   </div>
 
                   {/* Step 4 CTA: Button "Сделать отклик" */}

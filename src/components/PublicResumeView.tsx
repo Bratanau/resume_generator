@@ -168,7 +168,7 @@ export const PublicResumeView: React.FC<PublicResumeViewProps> = ({ linkId, onBa
         {/* Main Clean Resume Card */}
         <div className="bg-white border border-slate-200 rounded-3xl p-6 sm:p-8 shadow-sm space-y-6">
           {/* Header */}
-          <div data-resume-section="Контакты" className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-slate-100 pb-6">
+          {!resume.html && <div data-resume-section="Контакты" className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-slate-100 pb-6">
             <div className="flex items-center gap-4">
               {resume.photo && <img src={resume.photo} alt="Фото кандидата" className="w-24 h-24 rounded-2xl object-cover border border-slate-200" />}
               <div>
@@ -250,18 +250,40 @@ export const PublicResumeView: React.FC<PublicResumeViewProps> = ({ linkId, onBa
                 <span>Пригласить на интервью</span>
               </a>
             )}
-          </div>
+          </div>}
+
+          {resume.html && (
+            <section data-resume-section="Полное резюме" className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-100">
+              <iframe
+                title="Полное резюме кандидата"
+                srcDoc={resume.html}
+                sandbox="allow-popups allow-popups-to-escape-sandbox"
+                referrerPolicy="no-referrer"
+                className="w-full bg-white"
+                style={{ height: `${Math.min(20000, Math.max(1500, Math.ceil((resume.fullResumeText?.length || 0) / 42) * 32 + 800))}px` }}
+              />
+            </section>
+          )}
 
           {/* Elevator Summary */}
-          <div data-resume-section="Профиль" className="bg-slate-50 border border-slate-200 rounded-2xl p-4 text-xs sm:text-sm text-slate-700 leading-relaxed">
+          {!resume.html && <div data-resume-section="Профиль" className="bg-slate-50 border border-slate-200 rounded-2xl p-4 text-xs sm:text-sm text-slate-700 leading-relaxed">
             <span className="font-bold text-slate-900 block mb-1">
               🎯 Позиционирование и ценность для команды:
             </span>
             {resume.summary}
-          </div>
+          </div>}
+
+          {!resume.html && resume.fullResumeText && (
+            <section data-resume-section="Полная версия" className="space-y-3">
+              <h2 className="text-sm font-bold text-slate-900">Полная версия резюме</h2>
+              <div className="rounded-2xl border border-slate-200 bg-white p-4 text-xs leading-6 text-slate-800 whitespace-pre-wrap break-words sm:p-6 sm:text-sm">
+                {resume.fullResumeText}
+              </div>
+            </section>
+          )}
 
           {/* Highlighted Metrics */}
-          {resume.metrics?.length > 0 && (
+          {!resume.html && resume.metrics?.length > 0 && (
             <div>
               <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2.5">
                 Показатели:
@@ -282,7 +304,7 @@ export const PublicResumeView: React.FC<PublicResumeViewProps> = ({ linkId, onBa
           )}
 
           {/* STAR Experience Bullets */}
-          <div data-resume-section="Опыт и кейсы">
+          {!resume.html && !resume.fullResumeText && <div data-resume-section="Опыт и кейсы">
             <h2 className="text-sm font-bold text-slate-900 mb-3 flex items-center gap-2">
               <TrendingUp className="w-4 h-4 text-emerald-600" />
               <span>Опыт и ключевые решения (Situation → Task → Action → Result)</span>
@@ -296,10 +318,10 @@ export const PublicResumeView: React.FC<PublicResumeViewProps> = ({ linkId, onBa
                 </div>
               ))}
             </div>
-          </div>
+          </div>}
 
           {/* Tech Stack Matrix */}
-          <div data-resume-section="Навыки">
+          {!resume.html && !resume.fullResumeText && <div data-resume-section="Навыки">
             <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">
               Технологический стек:
             </h2>
@@ -314,6 +336,7 @@ export const PublicResumeView: React.FC<PublicResumeViewProps> = ({ linkId, onBa
               ))}
             </div>
           </div>
+          }
         </div>
 
         <p className="px-2 text-center text-[11px] leading-relaxed text-slate-500">
