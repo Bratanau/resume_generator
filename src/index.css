@@ -36,12 +36,6 @@ button:disabled { cursor: not-allowed !important; opacity: .58; }
 .hr-shell { min-height: 100vh; background: #f8f9f6; }
 .hr-sidebar { position: fixed; inset: 0 auto 0 0; z-index: 4; display: flex; width: 244px; flex-direction: column; padding: 26px 15px 13px; border-right: 1px solid #e9ece5; background: #fff; }
 .hr-sidebar > .brand { margin: 0 0 29px 7px; }
-.workspace-switch { display: flex; min-height: 55px; align-items: center; gap: 9px; padding: 8px; border: 1px solid #e9ece6; border-radius: 8px; }
-.workspace-avatar { display: grid; width: 31px; height: 31px; flex: 0 0 31px; place-items: center; border-radius: 7px; background: #315840; color: white; font: 650 14px 'Manrope', sans-serif; }
-.workspace-switch > div { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 2px; }
-.workspace-switch > div > strong { overflow: hidden; color: #363b34; font-size: 11px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
-.workspace-switch > div > span { color: #91958c; font-size: 9px; }
-.workspace-switch > svg { flex: 0 0 auto; color: #898e85; }
 .nav-caption { display: block; margin: 27px 8px 9px; color: #a0a49b; font-size: 8px; font-weight: 700; letter-spacing: 1px; }
 .hr-nav { display: flex; width: 100%; height: 39px; align-items: center; gap: 10px; padding: 0 10px; border: 0; border-radius: 6px; background: #edf4ed; color: #42684a; cursor: pointer; text-align: left; font-size: 11px; font-weight: 600; }
 .nav-count { display: grid; min-width: 20px; height: 19px; place-items: center; margin-left: auto; border-radius: 5px; background: #dce9dc; color: #58725b; font-size: 9px; }
@@ -57,11 +51,6 @@ button:disabled { cursor: not-allowed !important; opacity: .58; }
 .privacy-box p { display: flex; flex-direction: column; gap: 4px; margin: 0; }
 .privacy-box strong { color: #506a53; font-size: 9px; font-weight: 600; }
 .privacy-box p > span { color: #888e83; font-size: 8px; line-height: 1.5; }
-.hr-profile { display: flex; align-items: center; gap: 9px; margin-top: 13px; padding: 12px 4px 2px; border-top: 1px solid #eff0eb; }
-.hr-profile > span { display: grid; width: 30px; height: 30px; place-items: center; border-radius: 50%; background: #eee5da; color: #785f48; font-size: 9px; font-weight: 700; }
-.hr-profile > div { display: flex; flex-direction: column; gap: 3px; }
-.hr-profile strong { font-size: 9px; font-weight: 600; }
-.hr-profile small { color: #95998f; font-size: 8px; }
 
 .hr-main { min-height: 100vh; margin-left: 244px; }
 .hr-topbar { position: sticky; top: 0; z-index: 3; display: flex; height: 55px; align-items: center; justify-content: space-between; padding: 0 38px; border-bottom: 1px solid #e9ece5; background: rgb(255 255 255 / 94%); backdrop-filter: blur(12px); }
@@ -69,8 +58,6 @@ button:disabled { cursor: not-allowed !important; opacity: .58; }
 .breadcrumbs i { color: #c9ccc4; font-style: normal; }
 .breadcrumbs strong { color: #51564e; font-weight: 500; }
 .top-actions { display: flex; align-items: center; gap: 13px; }
-.demo-indicator { display: flex; align-items: center; gap: 6px; color: #8b9288; font-size: 8px; font-weight: 700; letter-spacing: .7px; }
-.demo-indicator i { width: 6px; height: 6px; border-radius: 50%; background: #d2a35a; }
 .button { display: inline-flex; min-height: 36px; align-items: center; justify-content: center; gap: 7px; padding: 0 13px; border: 1px solid transparent; border-radius: 6px; cursor: pointer; font-size: 10px; font-weight: 600; transition: background .15s, border-color .15s, transform .15s; }
 .button:active { transform: translateY(1px); }
 .button-primary { background: #356145; color: white; }
@@ -135,10 +122,13 @@ button:disabled { cursor: not-allowed !important; opacity: .58; }
 .application-summary { display: flex; width: 100%; min-height: 63px; align-items: center; gap: 10px; padding: 9px 15px; border: 0; background: transparent; cursor: pointer; text-align: left; transition: background .14s; }
 .application-summary:hover { background: #fafbf8; }
 .applicant-avatar { display: grid; width: 31px; height: 31px; flex: 0 0 31px; place-items: center; border-radius: 50%; font-size: 8px; font-weight: 600; }
+.avatar-with-photo { overflow: hidden; background: #edf0ea; }
+.avatar-with-photo img { width: 100%; height: 100%; object-fit: cover; }
 .avatar-green { background: #e8f0e5; color: #5e7d5e; }.avatar-peach { background: #f6ebe2; color: #a77c5b; }
 .applicant-main { display: flex; min-width: 145px; flex: 1; flex-direction: column; gap: 3px; }
 .applicant-main strong { color: #41463f; font-size: 9px; font-weight: 600; }
 .applicant-main small { color: #969b92; font-size: 8px; }
+.applicant-main .applicant-summary-snippet { max-width: 540px; overflow: hidden; color: #747b70; text-overflow: ellipsis; white-space: nowrap; }
 .applicant-duration { display: flex; flex: 0 0 auto; align-items: center; gap: 5px; color: #898f86; font-size: 8px; }
 .applicant-duration svg { color: #9da398; }
 .decision-badge { display: flex; flex: 0 0 auto; align-items: center; gap: 5px; padding: 5px 7px; border-radius: 4px; font-size: 8px; }
@@ -148,6 +138,16 @@ button:disabled { cursor: not-allowed !important; opacity: .58; }
 .application-summary > svg.chevron-open { transform: rotate(180deg); }
 .application-details { display: grid; grid-template-columns: 1.05fr 1fr; gap: 12px; padding: 0 16px 14px 57px; animation: show-detail .18s ease-out; }
 @keyframes show-detail { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: translateY(0); } }
+.applicant-profile { grid-column: 1 / -1; padding: 12px; border: 1px solid #edf0ea; border-radius: 6px; background: #fcfdfa; }
+.applicant-profile-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.applicant-profile-heading strong { color: #4f594d; font-size: 9px; font-weight: 600; }
+.applicant-profile > p { margin: 7px 0 0; color: #626a5e; font-size: 8px; line-height: 1.6; }
+.applicant-contact-links { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 9px; }
+.applicant-contact-links a { display: inline-flex; align-items: center; gap: 4px; padding: 5px 7px; border: 1px solid #e8ede5; border-radius: 4px; color: #5d765c; font-size: 7px; text-decoration: none; }
+.applicant-contact-links a:hover { border-color: #b7c8b3; background: #f4f8f2; }
+.applicant-resume { margin-top: 10px; border-top: 1px solid #edf0ea; }
+.applicant-resume summary { display: flex; align-items: center; gap: 5px; padding-top: 9px; color: #66745f; cursor: pointer; font-size: 8px; }
+.applicant-resume pre { max-height: 300px; overflow: auto; margin: 8px 0 0; padding: 10px; border-radius: 4px; background: #f5f7f3; color: #535a50; font-family: inherit; font-size: 8px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
 .candidate-feedback { align-self: start; padding: 11px; border: 1px solid #e9eee5; border-radius: 6px; background: #f8faf6; }
 .candidate-feedback > span { display: flex; align-items: center; gap: 5px; color: #68806a; font-size: 7px; font-weight: 700; letter-spacing: .5px; }
 .candidate-feedback p { margin: 7px 0 0; color: #656c61; font-size: 8px; line-height: 1.6; }
@@ -183,6 +183,9 @@ button:disabled { cursor: not-allowed !important; opacity: .58; }
 .dialog h2 { margin: 5px 0; color: #30362e; font: 700 21px 'Manrope', sans-serif; letter-spacing: -.65px; }
 .dialog-description { margin: 0 0 15px; color: #858b81; font-size: 9px; line-height: 1.55; }
 .dialog > label, .criteria-inputs > label { display: flex; flex-direction: column; gap: 5px; margin-top: 11px; color: #61675d; font-size: 9px; font-weight: 600; }
+.vacancy-extra-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 11px; }
+.vacancy-extra-fields > label { display: flex; min-width: 0; flex-direction: column; gap: 5px; margin-top: 11px; color: #61675d; font-size: 9px; font-weight: 600; }
+.vacancy-extra-fields > label:last-child { grid-column: 1 / -1; }
 .dialog input, .dialog textarea { width: 100%; min-height: 35px; padding: 8px 9px; border: 1px solid #e4e8df; border-radius: 5px; outline: 0; background: white; color: #41473e; font-size: 9px; font-weight: 400; resize: vertical; }
 .dialog input:focus, .dialog textarea:focus { border-color: #88a68a; box-shadow: 0 0 0 3px #f0f5ef; }
 .dialog input::placeholder, .dialog textarea::placeholder { color: #a4a99f; }
@@ -216,8 +219,12 @@ button:disabled { cursor: not-allowed !important; opacity: .58; }
 .candidate-main { width: min(666px, calc(100% - 32px)); margin: 0 auto; padding: 38px 0 16px; }
 .job-intro { padding: 0 4px; }
 .job-company { display: flex; align-items: center; gap: 7px; color: #829084; font-size: 8px; font-weight: 700; letter-spacing: .8px; }
+.job-company a { display: inline-flex; align-items: center; gap: 2px; color: inherit; text-decoration: none; }
+.job-company a:hover { color: #4d7858; }
 .job-company > i { width: 7px; height: 7px; border-radius: 50%; background: #7eaa82; box-shadow: 0 0 0 3px #eaf2e8; }
 .job-company > span { color: #c6cbc2; }
+.job-vacancy-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.job-vacancy-meta > span { padding: 5px 8px; border: 1px solid #e8ede5; border-radius: 4px; background: #fff; color: #6a7567; font-size: 8px; }
 .job-intro h1 { margin: 10px 0 7px; color: #2b342a; font: 700 28px/1.25 'Manrope', sans-serif; letter-spacing: -.8px; }
 .job-intro > p { max-width: 580px; margin: 0; color: #7b8379; font-size: 11px; line-height: 1.7; }
 .job-expectations { display: flex; flex-wrap: wrap; gap: 9px 18px; margin-top: 15px; }
@@ -349,9 +356,7 @@ button:disabled { cursor: not-allowed !important; opacity: .58; }
 @media (max-width: 760px) {
   .hr-sidebar { width: 58px; align-items: center; padding: 15px 6px 10px; }
   .hr-sidebar > .brand { margin: 0 0 18px; }
-  .hr-sidebar > .brand > span:last-child, .workspace-switch > div, .workspace-switch > svg, .nav-caption, .hr-nav:not(.active) { display: none; }
-  .workspace-switch { min-height: 43px; padding: 6px; border: 0; }
-  .workspace-avatar { width: 30px; height: 30px; }
+  .hr-sidebar > .brand > span:last-child, .nav-caption, .hr-nav:not(.active) { display: none; }
   .hr-nav { width: 42px; height: 42px; justify-content: center; padding: 0; font-size: 0; }
   .hr-nav svg { flex: 0 0 17px; }
   .hr-nav .nav-count, .sidebar-vacancies, .sidebar-bottom { display: none; }
@@ -359,7 +364,6 @@ button:disabled { cursor: not-allowed !important; opacity: .58; }
   .hr-topbar { height: 49px; padding: 0 12px; }
   .breadcrumbs { gap: 6px; font-size: 8px; }
   .top-actions { gap: 6px; }
-  .demo-indicator { font-size: 6px; }
   .top-candidate { min-height: 28px; gap: 4px; padding: 0 6px; font-size: 7px; }
   .top-candidate > svg { width: 12px; }
   .hr-page { padding: 19px 11px 10px; }
@@ -393,12 +397,15 @@ button:disabled { cursor: not-allowed !important; opacity: .58; }
   .applicant-main { min-width: 66px; }
   .applicant-main strong { font-size: 8px; }
   .applicant-main small { max-width: 100px; overflow: hidden; font-size: 7px; text-overflow: ellipsis; white-space: nowrap; }
+  .applicant-main .applicant-summary-snippet { max-width: 100px; }
   .applicant-duration { gap: 3px; font-size: 6px; }
   .applicant-duration svg { width: 10px; }
   .decision-badge { gap: 4px; padding: 4px 5px; font-size: 6px; }
   .decision-badge > i { width: 4px; height: 4px; }
   .application-summary > svg { width: 13px; }
   .application-details { grid-template-columns: 1fr; gap: 9px; padding: 0 9px 10px 39px; }
+  .applicant-profile { grid-column: auto; padding: 9px; }
+  .applicant-profile-heading { align-items: flex-start; flex-direction: column; gap: 5px; }
   .answer-list { grid-column: auto; }
   .hr-footer { flex-direction: column; gap: 5px; padding-top: 12px; font-size: 7px; }
   .candidate-header { height: 52px; padding: 0 12px; }
@@ -425,7 +432,8 @@ button:disabled { cursor: not-allowed !important; opacity: .58; }
   .privacy-disclosure { align-self: flex-start; }
   .candidate-brand-footer { margin-top: 18px; }
   .dialog { padding: 18px 14px; }
-  .criteria-inputs { grid-template-columns: 1fr; gap: 0; }
+  .criteria-inputs, .vacancy-extra-fields { grid-template-columns: 1fr; gap: 0; }
+  .vacancy-extra-fields > label:last-child { grid-column: auto; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }

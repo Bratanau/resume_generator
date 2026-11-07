@@ -9,12 +9,14 @@ import {
   ChevronDown,
   CircleHelp,
   Clock3,
+  Globe2,
   FileCheck2,
   FileText,
   Link2,
   LoaderCircle,
   LockKeyhole,
   MessageCircle,
+  Pencil,
   Plus,
   Search,
   ShieldCheck,
@@ -29,7 +31,11 @@ type Vacancy = {
   id: string;
   title: string;
   companyName: string;
+  companyWebsite: string;
   description: string;
+  location: string;
+  employmentType: string;
+  salaryRange: string;
   requiredCriteria: string[];
   preferredCriteria: string[];
   createdAt: string;
@@ -49,6 +55,11 @@ type Application = ApplicationResult & {
   vacancyId: string;
   candidateName: string;
   email: string;
+  candidateRole: string;
+  profileSummary: string;
+  resumeText: string;
+  profileLinks: { label: string; url: string }[];
+  profilePhoto: string;
   questions: string[];
   answers: string[];
   submittedAt: string;
@@ -58,6 +69,8 @@ type ResumeAnalysis = {
   candidateName: string;
   candidateRole: string;
   summary: string;
+  profileLinks: { label: string; url: string }[];
+  profilePhoto: string;
   criteria: Criterion[];
   questions: string[];
   resumeText: string;
@@ -70,6 +83,10 @@ const demoVacancyId = 'senior-product-designer';
 const demoApplications: Application[] = [
   {
     id: 'demo-1', vacancyId: demoVacancyId, candidateName: 'Александр Морозов', email: 'alex@example.com',
+    candidateRole: 'Product Designer', profileSummary: 'Вёл редизайн цифрового продукта от пользовательских интервью до запуска.',
+    resumeText: 'Product Designer с опытом продуктового дизайна и пользовательских исследований.',
+    profileLinks: [],
+    profilePhoto: '',
     questions: ['Расскажите о полном цикле работы над цифровым продуктом.'],
     answers: ['Вёл редизайн приложения от интервью с пользователями до запуска.'],
     decision: 'advance', explanation: 'В резюме и ответах подтверждены обязательные требования. Можно продолжить отбор.',
@@ -82,6 +99,10 @@ const demoApplications: Application[] = [
   },
   {
     id: 'demo-2', vacancyId: demoVacancyId, candidateName: 'Мария Кузнецова', email: 'maria@example.com',
+    candidateRole: 'Product Designer', profileSummary: 'Работала с аналитикой и прототипами; самостоятельный опыт интервью требует уточнения.',
+    resumeText: 'Product Designer с опытом аналитики и прототипирования.',
+    profileLinks: [],
+    profilePhoto: '',
     questions: ['Расскажите о вашем опыте пользовательских исследований.'],
     answers: ['Работала с аналитикой и прототипами, но сама интервью не проводила.'],
     decision: 'reject', explanation: 'В этой вакансии обязательны пользовательские исследования. В ответе вы указали, что пока не проводили их самостоятельно, поэтому мы не можем предложить следующий этап.',
@@ -135,6 +156,7 @@ function App() {
   const [applications, setApplications] = useState<Application[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [showVacancyForm, setShowVacancyForm] = useState(false);
+  const [editingVacancyId, setEditingVacancyId] = useState<string | null>(null);
   const [isSavingVacancy, setIsSavingVacancy] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -142,8 +164,12 @@ function App() {
   const [notice, setNotice] = useState('');
   const [shareUrl, setShareUrl] = useState('');
   const [vacancyTitle, setVacancyTitle] = useState('');
-  const [companyName, setCompanyName] = useState('Northstar');
+  const [companyName, setCompanyName] = useState('');
+  const [companyWebsite, setCompanyWebsite] = useState('');
   const [vacancyDescription, setVacancyDescription] = useState('');
+  const [vacancyLocation, setVacancyLocation] = useState('');
+  const [employmentType, setEmploymentType] = useState('');
+  const [salaryRange, setSalaryRange] = useState('');
   const [requiredText, setRequiredText] = useState('');
   const [preferredText, setPreferredText] = useState('');
   const [candidateName, setCandidateName] = useState('');
@@ -264,7 +290,41 @@ function App() {
     }
   };
 
-  const createVacancy = async (event: FormEvent<HTMLFormElement>) => {
+  const resetVacancyForm = () => {
+    setEditingVacancyId(null);
+    setVacancyTitle('');
+    setCompanyName('');
+    setCompanyWebsite('');
+    setVacancyDescription('');
+    setVacancyLocation('');
+    setEmploymentType('');
+    setSalaryRange('');
+    setRequiredText('');
+    setPreferredText('');
+  };
+
+  const openNewVacancyForm = () => {
+    resetVacancyForm();
+    setShowVacancyForm(true);
+    setError('');
+  };
+
+  const openEditVacancyForm = (item: Vacancy) => {
+    setEditingVacancyId(item.id);
+    setVacancyTitle(item.title);
+    setCompanyName(item.companyName);
+    setCompanyWebsite(item.companyWebsite || '');
+    setVacancyDescription(item.description);
+    setVacancyLocation(item.location || '');
+    setEmploymentType(item.employmentType || '');
+    setSalaryRange(item.salaryRange || '');
+    setRequiredText(item.requiredCriteria.join('\n'));
+    setPreferredText(item.preferredCriteria.join('\n'));
+    setShowVacancyForm(true);
+    setError('');
+  };
+
+  const saveVacancy = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setError('');
     const requiredCriteria = requiredText.split('\n').map((item) => item.trim()).filter(Boolean);
@@ -275,22 +335,34 @@ function App() {
     }
     setIsSavingVacancy(true);
     try {
-      const response = await requestJson<{ vacancy: Vacancy }>('/api/hiring/vacancies', {
-        method: 'POST',
+      const isEditing = Boolean(editingVacancyId);
+      const response = await requestJson<{ vacancy: Vacancy }>(
+        isEditing ? `/api/hiring/vacancies/${encodeURIComponent(editingVacancyId!)}` : '/api/hiring/vacancies',
+        {
+        method: isEditing ? 'PUT' : 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: vacancyTitle, companyName, description: vacancyDescription, requiredCriteria, preferredCriteria }),
+        body: JSON.stringify({
+          title: vacancyTitle,
+          companyName,
+          companyWebsite,
+          description: vacancyDescription,
+          location: vacancyLocation,
+          employmentType,
+          salaryRange,
+          requiredCriteria,
+          preferredCriteria,
+        }),
       });
-      setVacancies((current) => [...current, response.vacancy]);
+      setVacancies((current) => isEditing
+        ? current.map((item) => item.id === response.vacancy.id ? response.vacancy : item)
+        : [...current, response.vacancy]);
       setSelectedVacancyId(response.vacancy.id);
       setShowVacancyForm(false);
-      setVacancyTitle('');
-      setVacancyDescription('');
-      setRequiredText('');
-      setPreferredText('');
-      setShareUrl(makeShareUrl(response.vacancy.id));
-      setFlash('Вакансия опубликована. Ссылка для соискателей готова.');
-    } catch (createError) {
-      setError(createError instanceof Error ? createError.message : 'Не удалось создать вакансию.');
+      resetVacancyForm();
+      if (!isEditing) setShareUrl(makeShareUrl(response.vacancy.id));
+      setFlash(isEditing ? 'Изменения вакансии сохранены.' : 'Вакансия опубликована. Ссылка для соискателей готова.');
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : 'Не удалось сохранить вакансию.');
     } finally {
       setIsSavingVacancy(false);
     }
@@ -411,6 +483,9 @@ function App() {
           candidateName,
           email: candidateEmail,
           resumeText: analysis.resumeText,
+          candidateRole: analysis.candidateRole,
+          profileSummary: analysis.summary,
+          profilePhoto: analysis.profilePhoto,
           questions: analysis.questions,
           answers,
           startedAt,
@@ -477,6 +552,8 @@ function App() {
           candidateName: 'Алексей Петров',
           candidateRole: 'Product Designer',
           summary: 'В демонстрационном резюме подтверждён стаж. Исследования и полный цикл проекта описаны недостаточно подробно — спросим об этом перед решением.',
+          profileLinks: [],
+          profilePhoto: '',
           criteria: vacancy?.requiredCriteria.map((criterion, index) => ({
             criterion,
             status: index === 0 ? 'confirmed' : 'needs_clarification',
@@ -513,21 +590,31 @@ function App() {
     isLoading={isLoading}
     isCreatingVacancy={showVacancyForm}
     isSavingVacancy={isSavingVacancy}
+    isEditingVacancy={Boolean(editingVacancyId)}
     vacancyTitle={vacancyTitle}
     companyName={companyName}
+    companyWebsite={companyWebsite}
     vacancyDescription={vacancyDescription}
+    vacancyLocation={vacancyLocation}
+    employmentType={employmentType}
+    salaryRange={salaryRange}
     requiredText={requiredText}
     preferredText={preferredText}
     onSelectVacancy={(id) => { setSelectedVacancyId(id); setShareUrl(''); }}
     onCandidatePreview={() => navigate('candidate')}
-    onCreateOpen={() => { setShowVacancyForm(true); setError(''); }}
-    onCreateClose={() => { setShowVacancyForm(false); setError(''); }}
+    onCreateOpen={openNewVacancyForm}
+    onEditOpen={() => { if (vacancy) openEditVacancyForm(vacancy); }}
+    onCreateClose={() => { setShowVacancyForm(false); resetVacancyForm(); setError(''); }}
     onTitle={setVacancyTitle}
     onCompany={setCompanyName}
+    onCompanyWebsite={setCompanyWebsite}
     onDescription={setVacancyDescription}
+    onLocation={setVacancyLocation}
+    onEmploymentType={setEmploymentType}
+    onSalaryRange={setSalaryRange}
     onRequired={setRequiredText}
     onPreferred={setPreferredText}
-    onCreate={createVacancy}
+    onCreate={saveVacancy}
     onShare={shareVacancy}
     onClearShare={() => setShareUrl('')}
     onClearNotice={() => setNotice('')}
@@ -546,18 +633,28 @@ function HrWorkspace(props: {
   isLoading: boolean;
   isCreatingVacancy: boolean;
   isSavingVacancy: boolean;
+  isEditingVacancy: boolean;
   vacancyTitle: string;
   companyName: string;
+  companyWebsite: string;
   vacancyDescription: string;
+  vacancyLocation: string;
+  employmentType: string;
+  salaryRange: string;
   requiredText: string;
   preferredText: string;
   onSelectVacancy: (id: string) => void;
   onCandidatePreview: () => void;
   onCreateOpen: () => void;
+  onEditOpen: () => void;
   onCreateClose: () => void;
   onTitle: (value: string) => void;
   onCompany: (value: string) => void;
+  onCompanyWebsite: (value: string) => void;
   onDescription: (value: string) => void;
+  onLocation: (value: string) => void;
+  onEmploymentType: (value: string) => void;
+  onSalaryRange: (value: string) => void;
   onRequired: (value: string) => void;
   onPreferred: (value: string) => void;
   onCreate: (event: FormEvent<HTMLFormElement>) => void;
@@ -570,22 +667,22 @@ function HrWorkspace(props: {
   return <div className="hr-shell">
     <aside className="hr-sidebar">
       <Logo />
-      <div className="workspace-switch"><span className="workspace-avatar">{props.vacancy?.companyName.slice(0, 1) || 'N'}</span><div><strong>{props.vacancy?.companyName || 'Команда'}</strong><span>Кабинет работодателя</span></div><ChevronDown size={15} /></div>
       <span className="nav-caption">РАБОТА С КАНДИДАТАМИ</span>
       <button className="hr-nav active"><BriefcaseBusiness size={17} />Вакансии<span className="nav-count">{props.vacancies.length}</span></button>
       <div className="sidebar-vacancies"><span className="nav-caption">ВАШИ ВАКАНСИИ</span>{props.vacancies.map((item) => <button key={item.id} className={`sidebar-vacancy ${item.id === props.selectedVacancyId ? 'selected' : ''}`} onClick={() => props.onSelectVacancy(item.id)}><i /><span>{item.title}</span></button>)}</div>
-      <div className="sidebar-bottom"><div className="privacy-box"><ShieldCheck size={16} /><p><strong>Опыт важнее резюме</strong><span>Кандидат может дополнить факты, прежде чем ИИ сопоставит их с вакансией.</span></p></div><div className="hr-profile"><span>АК</span><div><strong>Анна Ковалёва</strong><small>Демо-аккаунт</small></div></div></div>
+      <div className="sidebar-bottom"><div className="privacy-box"><ShieldCheck size={16} /><p><strong>Опыт важнее резюме</strong><span>Кандидат может дополнить факты, прежде чем ИИ сопоставит их с вакансией.</span></p></div></div>
     </aside>
 
     <main className="hr-main">
-      <header className="hr-topbar"><div className="breadcrumbs"><span>Рабочее пространство</span><i>/</i><strong>Вакансии</strong></div><div className="top-actions"><span className="demo-indicator"><i /> ДЕМО-ПРОЕКТ</span><button className="button button-outline top-candidate" onClick={props.onCandidatePreview}><Users size={15} /> Предпросмотр для соискателя <ArrowUpRight size={13} /></button></div></header>
+      <header className="hr-topbar"><div className="breadcrumbs"><strong>Вакансии</strong></div><div className="top-actions"><button className="button button-outline top-candidate" onClick={props.onCandidatePreview}><Users size={15} /> Предпросмотр для соискателя <ArrowUpRight size={13} /></button></div></header>
       <div className="hr-page">
-        <section className="hr-welcome"><div><div className="eyebrow"><span /> КАБИНЕТ РАБОТОДАТЕЛЯ</div><h1>Вакансии<span>.</span></h1><p>Сначала выясняем факты — только потом принимаем решение.</p></div><button className="button button-primary new-vacancy" onClick={props.onCreateOpen}><Plus size={16} /> Новая вакансия</button></section>
+        <section className="hr-welcome"><div><div className="eyebrow"><span /> ПЕРВИЧНЫЙ ОТБОР</div><h1>Вакансии<span>.</span></h1><p>Сначала выясняем факты — только потом принимаем решение.</p></div><button className="button button-primary new-vacancy" onClick={props.onCreateOpen}><Plus size={16} /> Новая вакансия</button></section>
         {props.error && <div className="inline-alert" role="alert"><CircleHelp size={15} />{props.error}</div>}
         {props.vacancy && <>
           <section className="vacancy-title-card">
             <div className="vacancy-icon"><BriefcaseBusiness size={19} /></div>
-            <div className="vacancy-overview"><div className="vacancy-status"><i /> ОТКРЫТАЯ ВАКАНСИЯ <span>·</span> ДЕМО-ПРИМЕР</div><h2>{props.vacancy.title}</h2><p>{props.vacancy.companyName} <span>·</span> {props.vacancy.description || 'По ссылке соискатели загрузят резюме и ответят на уточняющие вопросы.'}</p></div>
+            <div className="vacancy-overview"><div className="vacancy-status"><i /> ОТКРЫТАЯ ВАКАНСИЯ</div><h2>{props.vacancy.title}</h2><p>{props.vacancy.companyName} <span>·</span> {props.vacancy.description || 'По ссылке соискатели загрузят резюме и ответят на уточняющие вопросы.'}</p><div className="vacancy-meta">{props.vacancy.location && <span>{props.vacancy.location}</span>}{props.vacancy.employmentType && <span>{props.vacancy.employmentType}</span>}{props.vacancy.salaryRange && <span>{props.vacancy.salaryRange}</span>}{props.vacancy.companyWebsite && <a href={props.vacancy.companyWebsite} target="_blank" rel="noreferrer"><Globe2 size={11} /> Сайт работодателя</a>}</div></div>
+            <button className="button button-outline edit-vacancy-button" onClick={props.onEditOpen}><Pencil size={14} /> Редактировать</button>
             <button className="button button-outline share-button" onClick={() => props.onShare(props.vacancy!.id)}><Link2 size={15} /> Ссылка для соискателя</button>
           </section>
           <section className="metric-grid">
@@ -601,20 +698,58 @@ function HrWorkspace(props: {
           }} /></label></div>
             {props.isLoading ? <div className="loading-line"><LoaderCircle size={17} />Загружаем отклики…</div> : selectedApplications.length ? <div className="application-list">{selectedApplications.map((application) => <article className="application-card" key={application.id} data-name={application.candidateName.toLocaleLowerCase('ru')}>
               <button className="application-summary" onClick={() => setExpandedId(expandedId === application.id ? null : application.id)} aria-expanded={expandedId === application.id}>
-                <span className={`applicant-avatar ${application.decision === 'advance' ? 'avatar-green' : 'avatar-peach'}`}>{application.candidateName.split(' ').map((part) => part[0]).slice(0, 2).join('')}</span>
-                <span className="applicant-main"><strong>{application.candidateName}</strong><small>{application.id.startsWith('demo-') ? 'Демонстрационный пример' : application.email}</small></span>
+                <span className={`applicant-avatar ${application.profilePhoto ? 'avatar-with-photo' : application.decision === 'advance' ? 'avatar-green' : 'avatar-peach'}`}>{application.profilePhoto ? <img src={application.profilePhoto} alt="" /> : application.candidateName.split(' ').map((part) => part[0]).slice(0, 2).join('')}</span>
+                <span className="applicant-main"><strong>{application.candidateName}</strong><small>{application.candidateRole || (application.id.startsWith('demo-') ? 'Демонстрационный пример' : application.email)}</small><small className="applicant-summary-snippet">{application.profileSummary}</small></span>
                 <span className="applicant-duration"><Clock3 size={13} /> {Math.floor(application.durationSeconds / 60)} мин {application.durationSeconds % 60} сек</span>
                 <span className={`decision-badge ${application.decision === 'advance' ? 'decision-advance' : 'decision-reject'}`}><i />{application.decision === 'advance' ? 'Продолжить отбор' : 'Отказ с объяснением'}</span>
                 <ChevronDown className={expandedId === application.id ? 'chevron-open' : ''} size={16} />
               </button>
-              {expandedId === application.id && <div className="application-details"><div className="candidate-feedback"><span><Sparkles size={13} /> ОБЪЯСНЕНИЕ ДЛЯ СОИСКАТЕЛЯ</span><p>{application.explanation}</p></div><div className="evidence-list"><h4>Подтверждение требований</h4>{application.evidence.map((item) => <div className="evidence-item" key={item.criterion}><i className={item.status === 'confirmed' ? 'evidence-yes' : 'evidence-no'}>{item.status === 'confirmed' ? <Check size={10} /> : <X size={10} />}</i><span><strong>{item.criterion}</strong><small>{item.evidence}</small></span></div>)}</div>{application.questions.length > 0 && <div className="answer-list"><h4>Ответы соискателя</h4>{application.questions.map((question, index) => <div key={`${question}-${index}`}><span>{question}</span><p>{application.answers[index] || 'Ответ не указан'}</p></div>)}</div>}</div>}
+              {expandedId === application.id && <div className="application-details">
+                <section className="applicant-profile">
+                  <div className="applicant-profile-heading"><span className="eyebrow-mini">ПРОФИЛЬ СОИСКАТЕЛЯ</span><strong>{application.candidateRole || 'Специализация не указана'}</strong></div>
+                  <p>{application.profileSummary || 'Краткое описание профиля не предоставлено.'}</p>
+                  <div className="applicant-contact-links">
+                    <a href={`mailto:${encodeURIComponent(application.email)}`}><MessageCircle size={12} />{application.email}</a>
+                    {application.profileLinks.map((link) => (
+                      <a key={`${link.label}-${link.url}`} href={link.url} target={link.url.startsWith('http') ? '_blank' : undefined} rel={link.url.startsWith('http') ? 'noreferrer' : undefined}>
+                        {link.label === 'GitHub' ? <Link2 size={12} /> : <ArrowUpRight size={12} />}{link.label === 'Телефон' ? link.url.slice(4) : link.url.replace(/^https?:\/\//iu, '')}
+                      </a>
+                    ))}
+                  </div>
+                  <details className="applicant-resume"><summary><FileText size={13} /> Резюме соискателя</summary><pre>{application.resumeText || 'Текст резюме не сохранён.'}</pre></details>
+                </section>
+                <div className="candidate-feedback"><span><Sparkles size={13} /> ОБЪЯСНЕНИЕ ДЛЯ СОИСКАТЕЛЯ</span><p>{application.explanation}</p></div>
+                <div className="evidence-list"><h4>Подтверждение требований</h4>{application.evidence.map((item) => <div className="evidence-item" key={item.criterion}><i className={item.status === 'confirmed' ? 'evidence-yes' : 'evidence-no'}>{item.status === 'confirmed' ? <Check size={10} /> : <X size={10} />}</i><span><strong>{item.criterion}</strong><small>{item.evidence}</small></span></div>)}</div>
+                {application.questions.length > 0 && <div className="answer-list"><h4>Ответы соискателя</h4>{application.questions.map((question, index) => <div key={`${question}-${index}`}><span>{question}</span><p>{application.answers[index] || 'Ответ не указан'}</p></div>)}</div>}
+              </div>}
             </article>)}</div> : <div className="empty-applications"><div><FileCheck2 size={21} /></div><h3>Пока нет откликов на эту вакансию</h3><p>Поделитесь ссылкой. Соискатель загрузит резюме, ответит на вопросы и сразу получит объяснение решения.</p><button className="button button-primary" onClick={() => props.onShare(props.vacancy!.id)}><Link2 size={14} /> Скопировать ссылку на вакансию</button></div>}
           </section>
         </>}
         {!props.vacancy && !props.isLoading && <div className="empty-vacancies"><BriefcaseBusiness size={26} /><h2>Пока нет вакансий</h2><p>Создайте вакансию, укажите обязательные требования и поделитесь ссылкой с кандидатами.</p><button className="button button-primary" onClick={props.onCreateOpen}><Plus size={15} /> Создать вакансию</button></div>}
-        <footer className="hr-footer"><span>Люди AI <i /> сопоставляет опыт с обязательными требованиями и объясняет решение.</span><span>Демо · Без авторизации · Не загружайте реальные резюме</span></footer>
+        <footer className="hr-footer"><span>Люди AI <i /> сопоставляет опыт с обязательными требованиями и объясняет решение.</span><span>Без авторизации · Не загружайте реальные резюме</span></footer>
       </div>
-      {props.isCreatingVacancy && <div className="overlay" onMouseDown={(event) => { if (event.target === event.currentTarget) props.onCreateClose(); }}><form className="dialog vacancy-dialog" onSubmit={props.onCreate}><button type="button" className="dialog-close" aria-label="Закрыть" onClick={props.onCreateClose}><X size={18} /></button><div className="dialog-icon"><BriefcaseBusiness size={19} /></div><span className="eyebrow-mini">НОВАЯ ВАКАНСИЯ</span><h2>Кого вы ищете?</h2><p className="dialog-description">Опишите роль и укажите, какие подтверждённые навыки действительно обязательны.</p><label>Название вакансии<input required maxLength={120} value={props.vacancyTitle} onChange={(event) => props.onTitle(event.target.value)} placeholder="Например, Product Designer" /></label><label>Компания<input maxLength={120} value={props.companyName} onChange={(event) => props.onCompany(event.target.value)} placeholder="Название компании" /></label><label>Описание вакансии<textarea required rows={3} value={props.vacancyDescription} onChange={(event) => props.onDescription(event.target.value)} placeholder="Задачи, команда и контекст роли" /></label><div className="criteria-inputs"><label>Обязательные требования<textarea required rows={3} value={props.requiredText} onChange={(event) => props.onRequired(event.target.value)} placeholder={'Каждое требование — с новой строки'} /><small>ИИ задаст вопрос, если опыт неясен в резюме.</small></label><label>Будет плюсом<textarea rows={3} value={props.preferredText} onChange={(event) => props.onPreferred(event.target.value)} placeholder={'Каждое требование — с новой строки'} /><small>Эти пункты не могут стать причиной отказа.</small></label></div>{props.error && <div className="form-alert">{props.error}</div>}<div className="dialog-actions"><button type="button" className="button button-outline" onClick={props.onCreateClose}>Отмена</button><button type="submit" className="button button-primary" disabled={props.isSavingVacancy}>{props.isSavingVacancy ? <LoaderCircle className="spin" size={14} /> : <Plus size={15} />} Создать вакансию</button></div></form></div>}
+      {props.isCreatingVacancy && <div className="overlay" onMouseDown={(event) => { if (event.target === event.currentTarget) props.onCreateClose(); }}><form className="dialog vacancy-dialog" onSubmit={props.onCreate}>
+        <button type="button" className="dialog-close" aria-label="Закрыть" onClick={props.onCreateClose}><X size={18} /></button>
+        <div className="dialog-icon"><BriefcaseBusiness size={19} /></div>
+        <span className="eyebrow-mini">{props.isEditingVacancy ? 'РЕДАКТИРОВАНИЕ ВАКАНСИИ' : 'НОВАЯ ВАКАНСИЯ'}</span>
+        <h2>{props.isEditingVacancy ? 'Обновить вакансию' : 'Кого вы ищете?'}</h2>
+        <p className="dialog-description">Опишите роль и укажите, какие подтверждённые навыки действительно обязательны.</p>
+        <label>Название вакансии<input required maxLength={120} value={props.vacancyTitle} onChange={(event) => props.onTitle(event.target.value)} placeholder="Например, Product Designer" /></label>
+        <label>Компания<input maxLength={120} value={props.companyName} onChange={(event) => props.onCompany(event.target.value)} placeholder="Название компании" /></label>
+        <label>Сайт работодателя — необязательно<input type="url" maxLength={500} value={props.companyWebsite} onChange={(event) => props.onCompanyWebsite(event.target.value)} placeholder="https://company.example" /></label>
+        <div className="vacancy-extra-fields">
+          <label>Местоположение — необязательно<input maxLength={160} value={props.vacancyLocation} onChange={(event) => props.onLocation(event.target.value)} placeholder="Город или удалённо" /></label>
+          <label>Занятость — необязательно<input maxLength={100} value={props.employmentType} onChange={(event) => props.onEmploymentType(event.target.value)} placeholder="Полная, частичная, контракт" /></label>
+          <label>Зарплатный диапазон — необязательно<input maxLength={120} value={props.salaryRange} onChange={(event) => props.onSalaryRange(event.target.value)} placeholder="Например, 150 000–220 000 ₽" /></label>
+        </div>
+        <label>Описание вакансии<textarea required rows={3} value={props.vacancyDescription} onChange={(event) => props.onDescription(event.target.value)} placeholder="Задачи, команда и контекст роли" /></label>
+        <div className="criteria-inputs">
+          <label>Обязательные требования<textarea required rows={3} value={props.requiredText} onChange={(event) => props.onRequired(event.target.value)} placeholder="Каждое требование — с новой строки" /><small>ИИ задаст вопрос, если опыт неясен в резюме.</small></label>
+          <label>Будет плюсом<textarea rows={3} value={props.preferredText} onChange={(event) => props.onPreferred(event.target.value)} placeholder="Каждое требование — с новой строки" /><small>Эти пункты не могут стать причиной отказа.</small></label>
+        </div>
+        {props.error && <div className="form-alert">{props.error}</div>}
+        <div className="dialog-actions"><button type="button" className="button button-outline" onClick={props.onCreateClose}>Отмена</button><button type="submit" className="button button-primary" disabled={props.isSavingVacancy}>{props.isSavingVacancy ? <LoaderCircle className="spin" size={14} /> : props.isEditingVacancy ? <Check size={15} /> : <Plus size={15} />}{props.isEditingVacancy ? 'Сохранить изменения' : 'Создать вакансию'}</button></div>
+      </form></div>}
       {props.shareUrl && <div className="share-popover"><div><CheckCircle2 size={17} /><strong>Ссылка готова к отправке</strong><button aria-label="Закрыть" onClick={() => { props.onClearShare(); props.onClearNotice(); }}><X size={15} /></button></div><p>По ссылке кандидат попадёт сразу на страницу этой вакансии.</p><input readOnly value={props.shareUrl} onFocus={(event) => event.target.select()} /><button className="copy-link" onClick={() => void props.onShare(props.vacancy?.id || demoVacancyId)}>Скопировать ссылку <ArrowRight size={13} /></button></div>}
       {props.notice && <div className="toast" role="status"><CheckCircle2 size={16} />{props.notice}<button onClick={props.onClearNotice} aria-label="Закрыть уведомление"><X size={14} /></button></div>}
     </main>
@@ -659,14 +794,14 @@ function CandidateExperience(props: {
     <header className="candidate-header"><Logo /><div className="candidate-header-note"><LockKeyhole size={13} /> Ваша информация передаётся только работодателю</div><button className="return-hr" onClick={props.onBack}>Для работодателя <ArrowUpRight size={13} /></button></header>
     <main className="candidate-main">
       {props.isLoading ? <div className="candidate-loading"><LoaderCircle size={22} />Загружаем вакансию…</div> : !props.vacancy ? <section className="unavailable-card"><div className="unavailable-icon"><CircleHelp size={21} /></div><h1>Вакансия недоступна</h1><p>Возможно, ссылка устарела. Попросите работодателя прислать актуальную.</p><button className="text-button" onClick={props.onBack}><ArrowLeft size={14} /> Вернуться</button></section> : <>
-        <div className="job-intro"><span className="job-company"><i /> {props.vacancy.companyName} <span>·</span> ОТКРЫТЫЙ ОТБОР</span><h1>{props.vacancy.title}</h1><p>{props.vacancy.description || 'Расскажите о своём опыте. Если резюме не отражает важную деталь, мы спросим об этом отдельно.'}</p><div className="job-expectations"><span><CheckCircle2 size={14} /> Сначала уточним ваш опыт</span><span><MessageCircle size={14} /> Решение и объяснение — сразу</span></div><div className="public-criteria"><span>ЧТО ВАЖНО ДЛЯ ЭТОЙ РОЛИ</span><div>{props.vacancy.requiredCriteria.map((criterion) => <span key={criterion}><Check size={10} />{criterion}</span>)}</div>{props.vacancy.preferredCriteria.length > 0 && <p><strong>Будет плюсом, но не причиной отказа:</strong> {props.vacancy.preferredCriteria.join(' · ')}</p>}</div></div>
+        <div className="job-intro"><span className="job-company"><i /> {props.vacancy.companyWebsite ? <a href={props.vacancy.companyWebsite} target="_blank" rel="noreferrer">{props.vacancy.companyName} <ArrowUpRight size={10} /></a> : props.vacancy.companyName} <span>·</span> ОТКРЫТЫЙ ОТБОР</span><h1>{props.vacancy.title}</h1><p>{props.vacancy.description || 'Расскажите о своём опыте. Если резюме не отражает важную деталь, мы спросим об этом отдельно.'}</p>{(props.vacancy.location || props.vacancy.employmentType || props.vacancy.salaryRange) && <div className="job-vacancy-meta">{[props.vacancy.location, props.vacancy.employmentType, props.vacancy.salaryRange].filter(Boolean).map((item) => <span key={item}>{item}</span>)}</div>}<div className="job-expectations"><span><CheckCircle2 size={14} /> Сначала уточним ваш опыт</span><span><MessageCircle size={14} /> Решение и объяснение — сразу</span></div><div className="public-criteria"><span>ЧТО ВАЖНО ДЛЯ ЭТОЙ РОЛИ</span><div>{props.vacancy.requiredCriteria.map((criterion) => <span key={criterion}><Check size={10} />{criterion}</span>)}</div>{props.vacancy.preferredCriteria.length > 0 && <p><strong>Будет плюсом, но не причиной отказа:</strong> {props.vacancy.preferredCriteria.join(' · ')}</p>}</div></div>
         <div className="candidate-progress">{['Резюме', 'Пара вопросов', 'Результат'].map((label, index) => <div className={`progress-step ${activeStep >= index + 1 ? 'progress-active' : ''} ${activeStep === index + 1 ? 'progress-current' : ''}`} key={label}><span>{activeStep > index + 1 ? <Check size={12} /> : index + 1}</span><small>{label}</small></div>)}</div>
         {props.step === 'application' && <form className="candidate-card" onSubmit={props.onAnalyze}>
           <div className="card-title"><span className="step-kicker">ШАГ 1 ИЗ 3</span><h2>Давайте познакомимся</h2><p>Загрузите резюме. ИИ сопоставит опыт только с требованиями этой вакансии.</p></div>
           <div className="field-pair"><label>Как к вам обращаться<input required value={props.candidateName} onChange={(event) => props.onName(event.target.value)} placeholder="Имя и фамилия" autoComplete="name" /></label><label>Ваша почта<input required type="email" value={props.candidateEmail} onChange={(event) => props.onEmail(event.target.value)} placeholder="you@example.com" autoComplete="email" /><small>Чтобы HR мог связаться, если вы пройдёте дальше.</small></label></div>
           <div className="resume-upload-section"><div className="field-label">Резюме</div><label className="upload-zone"><input key={fileInputKey} type="file" accept=".pdf,.txt,application/pdf,text/plain" onChange={(event) => { void props.onChooseResume(event); setFileInputKey((key) => key + 1); }} /><span className="upload-icon"><Upload size={19} /></span><strong>{props.resumeFile ? 'Заменить файл' : 'Нажмите, чтобы выбрать резюме'}</strong><span>PDF или TXT · до 15 МБ</span></label>{props.resumeFile && <div className="selected-file"><FileText size={16} /><span>{props.resumeFile.name}</span><button type="button" aria-label="Удалить резюме" onClick={() => { props.onRemoveResume(); setFileInputKey((key) => key + 1); }}><X size={15} /></button></div>}
           <label className="paste-resume">Или вставьте текст резюме<textarea rows={4} value={props.resumeTextInput} onChange={(event) => props.onResumeText(event.target.value)} placeholder="Опыт работы, проекты, навыки — всё, что поможет понять ваш опыт" /></label></div>
-          <label className="consent-row"><input type="checkbox" checked={props.consent} onChange={(event) => props.onConsent(event.target.checked)} /><span className="custom-checkbox"><Check size={11} /></span><span>Я согласен(на) на обработку резюме AI-сервисом, передачу работодателю моих ответов и хранение контакта, ответов и результата отбора в базе приложения.</span></label>
+          <label className="consent-row"><input type="checkbox" checked={props.consent} onChange={(event) => props.onConsent(event.target.checked)} /><span className="custom-checkbox"><Check size={11} /></span><span>Я согласен(на) на обработку резюме AI-сервисом, передачу работодателю резюме, контактов и ответов, а также на их хранение в базе приложения.</span></label>
           {props.error && <div className="form-alert" role="alert"><CircleHelp size={14} />{props.error}</div>}
           <button type="submit" className="button button-primary candidate-submit" disabled={props.isAnalyzing}>{props.isAnalyzing ? <><LoaderCircle className="spin" size={16} /> Внимательно читаем резюме…</> : <>Продолжить <ArrowRight size={15} /></>}</button>
           {props.vacancy.id === demoVacancyId && <button type="button" className="demo-flow-button" onClick={props.onDemo}><Sparkles size={13} /> Посмотреть демонстрационное прохождение</button>}
@@ -692,7 +827,7 @@ function CandidateExperience(props: {
           {!resultIsPositive && <div className="respect-note"><ShieldCheck size={15} /><span>Это решение относится только к вакансии «{props.vacancy.title}». Оно объясняет совпадение опыта с требованиями, а не оценивает ваш потенциал.</span></div>}
           <div className="result-privacy"><LockKeyhole size={13} />{props.demoMode ? 'В демонстрации данные не отправляются и не сохраняются.' : 'Ваши ответы и контакт переданы работодателю по этой вакансии.'}</div>
         </section>}
-        <div className="candidate-footer"><span>У вас есть возможность рассказать об опыте, которого не было видно в резюме.</span><details className="privacy-disclosure"><summary>Как обрабатываются данные?</summary><p>Резюме отправляется в подключённый AI-сервис, но не сохраняется в базе приложения. Контакт, ответы и результат отбора сохраняются в SQLite. В этой версии нет авторизации и разграничения доступа, поэтому не отправляйте настоящие персональные данные.</p></details></div>
+        <div className="candidate-footer"><span>У вас есть возможность рассказать об опыте, которого не было видно в резюме.</span><details className="privacy-disclosure"><summary>Как обрабатываются данные?</summary><p>Резюме отправляется в подключённый AI-сервис и сохраняется в SQLite, чтобы HR мог ознакомиться с ним вместе с вашим профилем, контактами и ответами. В этой версии нет авторизации и разграничения доступа, поэтому не отправляйте настоящие персональные данные.</p></details></div>
       </>}
       <footer className="candidate-brand-footer"><Logo small /><span>Найм начинается с диалога.</span></footer>
     </main>

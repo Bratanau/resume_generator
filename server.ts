@@ -11,6 +11,7 @@ import {
   findVerifiedEvidence,
 } from './hiring-evidence.ts';
 import { HiringDatabase, type HiringApplication, type HiringVacancy } from './hiring-database.ts';
+import { extractCandidateLinks } from './candidate-profile.ts';
 
 const require = createRequire(import.meta.url);
 const { PDFParse } = require('pdf-parse');
@@ -117,23 +118,20 @@ async function extractPdfContent(base64?: string): Promise<{ text: string; photo
   }
 }
 
-async function extractPdfText(base64?: string): Promise<string> {
-  if (!base64 || typeof base64 !== 'string') return '';
-  const cleanBase64 = base64.includes(',') ? base64.slice(base64.indexOf(',') + 1) : base64;
-  const buffer = Buffer.from(cleanBase64, 'base64');
-  if (buffer.length < 100) return '';
-
-  const parser = new PDFParse({ data: buffer });
+function validateCompanyWebsite(value: unknown): string | null {
+  if (typeof value !== 'string' || !value.trim()) return '';
   try {
-    await parser.load();
-    const textResult = await parser.getText({ parseHyperlinks: true });
-    return textResult.text || '';
-  } catch (error) {
-    console.warn('Could not parse uploaded hiring resume PDF:', error);
-    return '';
-  } finally {
-    await parser.destroy();
+    const url = new URL(value.trim());
+    if ((url.protocol !== 'https:' && url.protocol !== 'http:') || !url.hostname.includes('.')) return null;
+    return url.toString();
+  } catch {
+    return null;
   }
+}
+
+function validateProfilePhoto(value: unknown): string {
+  if (typeof value !== 'string' || value.length > 1_500_000) return '';
+  return /^data:image\/(?:jpeg|jpg|png|webp);base64,[A-Za-z0-9+/]+={0,2}$/iu.test(value) ? value : '';
 }
 
 // In-memory telemetry storage for simulated sessions & live captures
@@ -1134,7 +1132,11 @@ const demoVacancy: HiringVacancy = {
   id: 'senior-product-designer',
   title: 'Senior Product Designer',
   companyName: 'Northstar',
+  companyWebsite: '',
   description: 'Создавать цифровые продукты: исследовать задачи пользователей, проектировать интерфейсы и проверять решения вместе с командой.',
+  location: '',
+  employmentType: '',
+  salaryRange: '',
   requiredCriteria: [
     'От 5 лет опыта в продуктовом дизайне',
     'Опыт пользовательских исследований',
@@ -1165,6 +1167,10 @@ app.get('/api/hiring/vacancies/:vacancyId', (req, res) => {
 
 app.post('/api/hiring/vacancies', (req, res) => {
   const { title, companyName, description, requiredCriteria, preferredCriteria } = req.body;
+  const companyWebsite = validateCompanyWebsite(req.body.companyWebsite);
+  if (companyWebsite === null) {
+    return res.status(422).json({ error: 'Ссылка на сайт работодателя должна начинаться с http:// или https://.' });
+  }
   if (typeof title !== 'string' || !title.trim() || typeof description !== 'string' || !description.trim()
     || !Array.isArray(requiredCriteria)
     || !requiredCriteria.some((item: unknown) => typeof item === 'string' && item.trim())) {
@@ -1183,13 +1189,57 @@ app.post('/api/hiring/vacancies', (req, res) => {
     id: randomUUID(),
     title: title.trim().slice(0, 120),
     companyName: typeof companyName === 'string' && companyName.trim() ? companyName.trim().slice(0, 120) : 'Компания',
+    companyWebsite,
     description: description.trim().slice(0, 3000),
+    location: typeof req.body.location === 'string' ? req.body.location.trim().slice(0, 160) : '',
+    employmentType: typeof req.body.employmentType === 'string' ? req.body.employmentType.trim().slice(0, 100) : '',
+    salaryRange: typeof req.body.salaryRange === 'string' ? req.body.salaryRange.trim().slice(0, 120) : '',
     requiredCriteria: safeRequired,
     preferredCriteria: safePreferred,
     createdAt: new Date().toISOString(),
   };
   hiringDatabase.insertVacancy(vacancy);
   return res.status(201).json({ success: true, vacancy });
+});
+
+app.put('/api/hiring/vacancies/:vacancyId', (req, res) => {
+  const current = hiringDatabase.getVacancy(req.params.vacancyId);
+  if (!current) return res.status(404).json({ error: 'Вакансия не найдена.' });
+  const { title, companyName, description, requiredCriteria, preferredCriteria } = req.body;
+  const companyWebsite = validateCompanyWebsite(req.body.companyWebsite);
+  if (companyWebsite === null) {
+    return res.status(422).json({ error: 'Ссылка на сайт работодателя должна начинаться с http:// или https://.' });
+  }
+  if (typeof title !== 'string' || !title.trim() || typeof description !== 'string' || !description.trim()
+    || !Array.isArray(requiredCriteria)
+    || !requiredCriteria.some((item: unknown) => typeof item === 'string' && item.trim())) {
+    return res.status(400).json({ error: 'Укажите название вакансии и хотя бы одно обязательное требование.' });
+  }
+  const normalizeCriteria = (items: unknown[]) => items
+    .filter((item): item is string => typeof item === 'string')
+    .map((item) => item.trim()).filter(Boolean).slice(0, 12);
+  const safeRequired = normalizeCriteria(requiredCriteria);
+  const safePreferred = Array.isArray(preferredCriteria) ? normalizeCriteria(preferredCriteria) : [];
+  const sensitiveCriterion = /(?:^|[^\p{L}])(?:возраст\p{L}*|мужчин\p{L}*|женщин\p{L}*|пол(?:а|у|ом)?|национальност\p{L}*|гражданств\p{L}*|семейн\p{L}*\s+положен\p{L}*|религи\p{L}*|вероисповедан\p{L}*|инвалидност\p{L}*|ориентац\p{L}*|состояни\p{L}*\s+здоров\p{L}*)(?=$|[^\p{L}])/iu;
+  if ([...safeRequired, ...safePreferred].some((criterion) => sensitiveCriterion.test(criterion))) {
+    return res.status(422).json({ error: 'Критерии должны описывать рабочий опыт и навыки. Уберите требования, связанные с личными характеристиками.' });
+  }
+  const vacancy: HiringVacancy = {
+    ...current,
+    title: title.trim().slice(0, 120),
+    companyName: typeof companyName === 'string' && companyName.trim() ? companyName.trim().slice(0, 120) : 'Компания',
+    companyWebsite,
+    description: description.trim().slice(0, 3000),
+    location: typeof req.body.location === 'string' ? req.body.location.trim().slice(0, 160) : '',
+    employmentType: typeof req.body.employmentType === 'string' ? req.body.employmentType.trim().slice(0, 100) : '',
+    salaryRange: typeof req.body.salaryRange === 'string' ? req.body.salaryRange.trim().slice(0, 120) : '',
+    requiredCriteria: safeRequired,
+    preferredCriteria: safePreferred,
+  };
+  if (!hiringDatabase.updateVacancy(vacancy)) {
+    return res.status(500).json({ error: 'Не удалось сохранить изменения вакансии.' });
+  }
+  return res.json({ success: true, vacancy });
 });
 
 app.get('/api/hiring/applications/:vacancyId', (req, res) => {
@@ -1209,7 +1259,9 @@ app.post('/api/hiring/analyze', async (req, res) => {
   if (!hasYandexConfig) {
     return res.status(503).json({ error: 'AI-сервис недоступен. Настройте YANDEX_API_KEY и YANDEX_FOLDER_ID и попробуйте снова.' });
   }
-  const pdfText = pdfBase64 ? await extractPdfText(pdfBase64) : '';
+  const pdfContent = pdfBase64 ? await extractPdfContent(pdfBase64) : { text: '' };
+  const pdfText = pdfContent.text;
+  const profilePhoto = validateProfilePhoto(pdfContent.photo);
   const fullText = [resumeText, pdfText]
     .filter((value) => typeof value === 'string' && value.trim())
     .join('\n\n')
@@ -1262,6 +1314,8 @@ app.post('/api/hiring/analyze', async (req, res) => {
         candidateName: typeof result.candidateName === 'string' ? result.candidateName.slice(0, 100) : '',
         candidateRole: typeof result.candidateRole === 'string' ? result.candidateRole.slice(0, 120) : '',
         summary: typeof result.summary === 'string' ? result.summary.slice(0, 1200) : '',
+        profileLinks: extractCandidateLinks(fullText),
+        profilePhoto,
         criteria,
         questions: criteria
           .filter((criterion: { status: string }) => criterion.status === 'needs_clarification')
@@ -1276,7 +1330,18 @@ app.post('/api/hiring/analyze', async (req, res) => {
 });
 
 app.post('/api/hiring/submit', async (req, res) => {
-  const { vacancyId, candidateName, email, resumeText, questions, answers, startedAt } = req.body;
+  const {
+    vacancyId,
+    candidateName,
+    email,
+    resumeText,
+    candidateRole,
+    profileSummary,
+    profilePhoto,
+    questions,
+    answers,
+    startedAt,
+  } = req.body;
   const vacancy = typeof vacancyId === 'string' ? hiringDatabase.getVacancy(vacancyId) : undefined;
   if (typeof vacancyId !== 'string' || typeof candidateName !== 'string' || typeof email !== 'string'
     || typeof resumeText !== 'string' || !Array.isArray(questions) || !Array.isArray(answers)
@@ -1337,6 +1402,11 @@ app.post('/api/hiring/submit', async (req, res) => {
       vacancyId: vacancy.id,
       candidateName: candidateName.trim().slice(0, 100),
       email: email.trim().slice(0, 200),
+      candidateRole: typeof candidateRole === 'string' ? candidateRole.trim().slice(0, 120) : '',
+      profileSummary: typeof profileSummary === 'string' ? profileSummary.trim().slice(0, 1200) : '',
+      resumeText: resumeText.trim().slice(0, 100000),
+      profileLinks: extractCandidateLinks(resumeText),
+      profilePhoto: validateProfilePhoto(profilePhoto),
       questions: answerPairs.map((item: { question: string }) => item.question),
       answers: answerPairs.map((item: { answer: string }) => item.answer),
       decision,

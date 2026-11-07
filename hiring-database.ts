@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileS
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import initSqlJs, { type Database as SqlDatabase } from 'sql.js';
+import type { CandidateLink } from './candidate-profile.ts';
 
 const require = createRequire(import.meta.url);
 
@@ -9,7 +10,11 @@ export type HiringVacancy = {
   id: string;
   title: string;
   companyName: string;
+  companyWebsite: string;
   description: string;
+  location: string;
+  employmentType: string;
+  salaryRange: string;
   requiredCriteria: string[];
   preferredCriteria: string[];
   createdAt: string;
@@ -26,6 +31,11 @@ export type HiringApplication = {
   vacancyId: string;
   candidateName: string;
   email: string;
+  candidateRole: string;
+  profileSummary: string;
+  resumeText: string;
+  profileLinks: CandidateLink[];
+  profilePhoto: string;
   questions: string[];
   answers: string[];
   decision: 'advance' | 'reject';
@@ -59,6 +69,18 @@ function rowEvidenceArray(row: SqlValue[], index: number): HiringEvidence[] {
     && typeof item.evidence === 'string'
   ))) {
     throw new Error(`Invalid evidence list in SQLite column ${index}.`);
+  }
+  return value;
+}
+
+function rowLinkArray(row: SqlValue[], index: number): CandidateLink[] {
+  const value: unknown = JSON.parse(rowString(row, index));
+  if (!Array.isArray(value) || !value.every((item) => (
+    item && typeof item.label === 'string'
+    && typeof item.url === 'string'
+    && (/^https?:\/\//iu.test(item.url) || /^tel:\+?\d{9,15}$/u.test(item.url))
+  ))) {
+    throw new Error(`Invalid profile link list in SQLite column ${index}.`);
   }
   return value;
 }
@@ -115,6 +137,33 @@ export class HiringDatabase {
       CREATE INDEX IF NOT EXISTS applications_vacancy_submitted
         ON applications(vacancy_id, submitted_at DESC);
     `);
+    const applicationColumns = new Set(
+      database.exec('PRAGMA table_info(applications)')[0]?.values.map((row) => row[1]) ?? [],
+    );
+    for (const [column, definition] of [
+      ['candidate_role', "TEXT NOT NULL DEFAULT ''"],
+      ['profile_summary', "TEXT NOT NULL DEFAULT ''"],
+      ['resume_text', "TEXT NOT NULL DEFAULT ''"],
+      ['profile_links_json', "TEXT NOT NULL DEFAULT '[]'"],
+      ['profile_photo', "TEXT NOT NULL DEFAULT ''"],
+    ]) {
+      if (!applicationColumns.has(column)) {
+        database.run(`ALTER TABLE applications ADD COLUMN ${column} ${definition}`);
+      }
+    }
+    const vacancyColumns = new Set(
+      database.exec('PRAGMA table_info(vacancies)')[0]?.values.map((row) => row[1]) ?? [],
+    );
+    for (const [column, definition] of [
+      ['company_website', "TEXT NOT NULL DEFAULT ''"],
+      ['location', "TEXT NOT NULL DEFAULT ''"],
+      ['employment_type', "TEXT NOT NULL DEFAULT ''"],
+      ['salary_range', "TEXT NOT NULL DEFAULT ''"],
+    ]) {
+      if (!vacancyColumns.has(column)) {
+        database.run(`ALTER TABLE vacancies ADD COLUMN ${column} ${definition}`);
+      }
+    }
     const store = new HiringDatabase(database, resolvedPath);
     store.persist();
     return store;
@@ -127,7 +176,8 @@ export class HiringDatabase {
 
   listVacancies(): HiringVacancy[] {
     return this.query(`
-      SELECT id, title, company_name, description, required_criteria_json,
+      SELECT id, title, company_name, company_website, description, location,
+        employment_type, salary_range, required_criteria_json,
         preferred_criteria_json, created_at
       FROM vacancies ORDER BY created_at DESC
     `).map((row) => this.mapVacancy(row));
@@ -135,7 +185,8 @@ export class HiringDatabase {
 
   getVacancy(id: string): HiringVacancy | undefined {
     const row = this.query(`
-      SELECT id, title, company_name, description, required_criteria_json,
+      SELECT id, title, company_name, company_website, description, location,
+        employment_type, salary_range, required_criteria_json,
         preferred_criteria_json, created_at
       FROM vacancies WHERE id = ?
     `, [id])[0];
@@ -145,14 +196,19 @@ export class HiringDatabase {
   insertVacancy(vacancy: HiringVacancy): void {
     this.database.run(`
       INSERT INTO vacancies (
-        id, title, company_name, description, required_criteria_json,
+        id, title, company_name, company_website, description, location,
+        employment_type, salary_range, required_criteria_json,
         preferred_criteria_json, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       vacancy.id,
       vacancy.title,
       vacancy.companyName,
+      vacancy.companyWebsite,
       vacancy.description,
+      vacancy.location,
+      vacancy.employmentType,
+      vacancy.salaryRange,
       JSON.stringify(vacancy.requiredCriteria),
       JSON.stringify(vacancy.preferredCriteria),
       vacancy.createdAt,
@@ -160,10 +216,35 @@ export class HiringDatabase {
     this.persist();
   }
 
+  updateVacancy(vacancy: HiringVacancy): boolean {
+    this.database.run(`
+      UPDATE vacancies SET
+        title = ?, company_name = ?, company_website = ?, description = ?,
+        location = ?, employment_type = ?, salary_range = ?,
+        required_criteria_json = ?, preferred_criteria_json = ?
+      WHERE id = ?
+    `, [
+      vacancy.title,
+      vacancy.companyName,
+      vacancy.companyWebsite,
+      vacancy.description,
+      vacancy.location,
+      vacancy.employmentType,
+      vacancy.salaryRange,
+      JSON.stringify(vacancy.requiredCriteria),
+      JSON.stringify(vacancy.preferredCriteria),
+      vacancy.id,
+    ]);
+    if (!this.database.getRowsModified()) return false;
+    this.persist();
+    return true;
+  }
+
   listApplications(vacancyId: string): HiringApplication[] {
     return this.query(`
       SELECT id, vacancy_id, candidate_name, email, questions_json, answers_json,
-        decision, explanation, evidence_json, submitted_at, duration_seconds
+        decision, explanation, evidence_json, submitted_at, duration_seconds,
+        candidate_role, profile_summary, resume_text, profile_links_json, profile_photo
       FROM applications WHERE vacancy_id = ? ORDER BY submitted_at DESC
     `, [vacancyId]).map((row) => this.mapApplication(row));
   }
@@ -172,8 +253,9 @@ export class HiringDatabase {
     this.database.run(`
       INSERT INTO applications (
         id, vacancy_id, candidate_name, email, questions_json, answers_json,
-        decision, explanation, evidence_json, submitted_at, duration_seconds
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        decision, explanation, evidence_json, submitted_at, duration_seconds,
+        candidate_role, profile_summary, resume_text, profile_links_json, profile_photo
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       application.id,
       application.vacancyId,
@@ -186,6 +268,11 @@ export class HiringDatabase {
       JSON.stringify(application.evidence),
       application.submittedAt,
       application.durationSeconds,
+      application.candidateRole,
+      application.profileSummary,
+      application.resumeText,
+      JSON.stringify(application.profileLinks),
+      application.profilePhoto,
     ]);
     this.persist();
   }
@@ -203,10 +290,14 @@ export class HiringDatabase {
       id: rowString(row, 0),
       title: rowString(row, 1),
       companyName: rowString(row, 2),
-      description: rowString(row, 3),
-      requiredCriteria: rowStringArray(row, 4),
-      preferredCriteria: rowStringArray(row, 5),
-      createdAt: rowString(row, 6),
+      companyWebsite: rowString(row, 3),
+      description: rowString(row, 4),
+      location: rowString(row, 5),
+      employmentType: rowString(row, 6),
+      salaryRange: rowString(row, 7),
+      requiredCriteria: rowStringArray(row, 8),
+      preferredCriteria: rowStringArray(row, 9),
+      createdAt: rowString(row, 10),
     };
   }
 
@@ -223,6 +314,11 @@ export class HiringDatabase {
       evidence: rowEvidenceArray(row, 8),
       submittedAt: rowString(row, 9),
       durationSeconds: rowNumber(row, 10),
+      candidateRole: rowString(row, 11),
+      profileSummary: rowString(row, 12),
+      resumeText: rowString(row, 13),
+      profileLinks: rowLinkArray(row, 14),
+      profilePhoto: rowString(row, 15),
     };
   }
 
